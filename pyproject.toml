@@ -1,0 +1,14 @@
+[tool.ruff]
+# 选择要启用的规则集
+select = [
+    "E",   # pycodestyle 错误
+    "F",   # Pyflakes
+    "I",   # isort (自动排序导入)
+    "B",   # flake8-bugbear (发现潜在的 Bug)
+    "UP",  # pyupgrade (自动升级旧语法)
+]
+ignore = []
+
+[tool.ruff.lint]
+# 只要是违反规则，一律视为错误 (标红)
+preview = true
