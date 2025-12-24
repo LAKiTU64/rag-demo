@@ -13,8 +13,10 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 # Config
 EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
 INDEX_PATH = "./faiss_index"
-CHUNK_SIZE = 300
-CHUNK_OVERLAP = 30
+CHUNK_SIZE = 300  # 如果回答总是“断章取义”，需要把这个值调大；如果你发现 LLM 总是找不到重点，可能需要调小。
+CHUNK_OVERLAP = 30  # 如果切分后的句子经常出现“前因后果”不连贯，需要调小这个值。
+DEFAULT_SEARCH_K = 3
+SIMILARITY_THRESHOLD = 0.6  # 如果搜索结果总是“不相关”，需要调小这个值；如果总是“重复”或“完全不对”，需要调大这个值。
 
 
 class VectorKBManager:
@@ -126,20 +128,48 @@ class VectorKBManager:
         self.soft_deleted_sources.clear()
         print("🔥 硬删除完成：索引已重构，过时数据已被物理清除。")
 
-    def search(self, query: str, k: int = 3) -> list[Document]:
+    def search(
+        self,
+        query: str,
+        k: int = DEFAULT_SEARCH_K,
+        t: float = SIMILARITY_THRESHOLD,
+    ) -> list[Document]:
         """
         查询：在相似度搜索的基础上增加实时过滤逻辑。
         :param query: 用户提出的问题
         :param k: 返回最相关的结果数量，默认为3
         """
 
-        # 定义过滤函数：检查该文档是否在软删除黑名单中
-        def filter_func(metadata):
-            return metadata.get("doc_id") not in self.soft_deleted_sources
+        # 过滤被软删除的文档
+        docs_and_scores = self.vectorstore.similarity_search_with_score(
+            query,
+            k=k,
+            filter=lambda m: m.get("doc_id") not in self.soft_deleted_sources,
+        )
 
-        # 使用 filter 参数进行后置过滤（Post-filtering）
-        results = self.vectorstore.similarity_search(query, k=k, filter=filter_func)
-        return results
+        # 根据阈值过滤（使用 FAISS 默认的 L2 距离）
+        return [doc for doc, score in docs_and_scores if score < t]
+
+    def reset_index(self) -> None:
+        """
+        一键初始化/重置向量库：
+        彻底删除磁盘上的索引文件并清空内存状态，恢复到初始空库状态。
+        """
+
+        # 1. 物理删除本地索引目录
+        if os.path.exists(self.index_path):
+            try:
+                shutil.rmtree(self.index_path)
+                print(f"🧹 已物理删除本地索引目录: {self.index_path}")
+            except Exception as e:
+                print(f"⚠️ 删除索引目录失败: {e}")
+
+        # 2. 清空内存中的软删除记录
+        self.soft_deleted_sources.clear()
+
+        # 3. 调用初始化方法重新创建空库
+        self._load_or_create()
+        print("✨ 向量库已完成一键重置。")
 
 
 if __name__ == "__main__":
