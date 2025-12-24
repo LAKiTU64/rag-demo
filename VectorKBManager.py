@@ -1,213 +1,266 @@
 import os
 import shutil
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List
 
-from langchain_community.document_loaders import TextLoader
-from langchain_community.vectorstores import FAISS
-from langchain_core.documents import Document
+from langchain_chroma import Chroma
+from langchain_community.document_loaders import (
+    Docx2txtLoader,
+    PyPDFLoader,
+    TextLoader,
+    UnstructuredMarkdownLoader,
+)
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # 使用国内镜像源下载 HuggingFace 模型
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
-# Config
+# --- Config ---
 EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
-INDEX_PATH = "./faiss_index"
-CHUNK_SIZE = 300  # 如果回答总是“断章取义”，需要把这个值调大；如果你发现 LLM 总是找不到重点，可能需要调小。
-CHUNK_OVERLAP = 30  # 如果切分后的句子经常出现“前因后果”不连贯，需要调小这个值。
+CHROMA_PATH = "./chroma_db"
+CHUNK_SIZE = 300  # 如果回答总是“断章取义”，需要把这个值调大；如果发现 LLM 总是找不到重点，可能需要调小。
+CHUNK_OVERLAP = 50  # 如果切分后的句子经常出现“前因后果”不连贯，需要调小这个值。
 DEFAULT_SEARCH_K = 3
-SIMILARITY_THRESHOLD = 0.6  # 如果搜索结果总是“不相关”，需要调小这个值；如果总是“重复”或“完全不对”，需要调大这个值。
+SIMILARITY_THRESHOLD = 0.5  # 相似度阈值（0-1之间，越小越严苛）。
+BEIJING_TZ = timezone(timedelta(hours=8))  # 定义东八区时区
 
 
 class VectorKBManager:
     """
-    向量知识库管理类：支持基于文档维度的增、删、查。
-    删除策略：采用“软删除标记 + 硬删除重构”的方案。
+    向量知识库管理类（ChromaDB）：支持基于文档维度的增、删、查。
     """
 
-    def __init__(self, index_path="./faiss_index"):
-        self.index_path = index_path
-        self.embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+    def __init__(self, persist_directory=CHROMA_PATH) -> None:
+        self.persist_directory = persist_directory
+        # 初始化 Embedding
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL, encode_kwargs={"normalize_embeddings": True}
+        )
         self.vectorstore = None
-
-        # 软删除名单：存储在内存中的文件名集合。即使向量还在索引里，只要在这里面的文件，搜索时都会被过滤掉。
-        self.soft_deleted_sources = set()
 
         self._load_or_create()
 
-    def _load_or_create(self) -> None:
+    def _load_or_create(self, is_reset: bool = False) -> None:
         """
-        初始化加载。如果本地有索引则读取，否则创建一个空库。
+        初始化加载。如果本地有数据则读取，否则创建一个空库。
         """
+        if is_reset and os.path.exists(self.persist_directory):
+            shutil.rmtree(self.persist_directory)
 
-        if os.path.exists(self.index_path):
-            # 加载本地 FAISS 索引
-            self.vectorstore = FAISS.load_local(
-                self.index_path, self.embeddings, allow_dangerous_deserialization=True
-            )
-            print(f"📦 已从本地加载索引: {self.index_path}")
+        # 显式指定使用余弦距离 (Cosine Similarity)
+        # 注意：Chroma 返回的是距离 distance = 1 - similarity，所以依然是越小越相关
+        self.vectorstore = Chroma(
+            persist_directory=self.persist_directory,
+            embedding_function=self.embeddings,
+            collection_name="rag_collection",
+            collection_metadata={"hnsw:space": "cosine"},
+        )
+
+        # 根据是否存在目录显示状态
+        if (
+            not os.path.exists(self.persist_directory)
+            or self.vectorstore._collection.count() == 0
+        ):
+            print("🆕 已就绪全新的空向量库")
         else:
-            # FAISS 不允许完全空的库存在，所以初始化一个系统级别的占位文档
-            initial_doc = [
-                Document(
-                    page_content="init_system_placeholder",
-                    metadata={"doc_id": "system"},
-                )
-            ]
-            self.vectorstore = FAISS.from_documents(initial_doc, self.embeddings)
-            print("🆕 已初始化全新的向量库")
+            print(f"📦 已从本地加载 ChromaDB: {self.persist_directory}")
+
+    def _get_loader(
+        self, file_path: str
+    ) -> TextLoader | UnstructuredMarkdownLoader | Docx2txtLoader | PyPDFLoader:
+        """
+        根据文件后缀返回对应的 LangChain 加载器
+        """
+        ext = file_path.split(".")[-1].lower()
+        if ext == "txt":
+            return TextLoader(file_path, encoding="utf-8")
+        elif ext == "md":
+            return UnstructuredMarkdownLoader(file_path)
+        elif ext == "docx":
+            return Docx2txtLoader(file_path)
+        elif ext == "pdf":
+            return PyPDFLoader(file_path)
+        else:
+            raise ValueError(f"❌ 不支持的文件格式: {ext}")
 
     def add_document(self, file_path: str) -> None:
         """
-        增加文档：将文件读取、分割并存入向量库。
+        增加文档：如果存在同名文档，则直接覆写。
         :param file_path: 本地文档路径
         """
-        file_name = os.path.basename(file_path)
-
-        # 逻辑保护：如果该文件之前被软删除了，现在重新添加时应从名单中移除
-        if file_name in self.soft_deleted_sources:
-            self.soft_deleted_sources.remove(file_name)
-
-        # 1. 加载文本
-        loader = TextLoader(file_path, encoding="utf-8")
-        docs = loader.load()
-
-        # 2. 文本切分：设置 chunk 块大小和重叠度，确保语义不因切分而丢失
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP, add_start_index=True
-        )
-        splits = text_splitter.split_documents(docs)
-
-        # 3. 注入元数据：为每个分片打上doc_id（即文件名），可按doc_id进行管理
-        for split in splits:
-            split.metadata["doc_id"] = file_name
-
-        # 4. 添加到向量库并持久化
-        self.vectorstore.add_documents(documents=splits)
-        self.vectorstore.save_local(self.index_path)
-        print(f"✅ 文档 '{file_name}' 已入库 (共 {len(splits)} 个切片)")
-
-    def soft_delete(self, file_name: str) -> None:
-        """
-        软删除：仅在向量库中记录该文件已“失效”，搜索时会自动跳过。
-        """
-        self.soft_deleted_sources.add(file_name)
-        print(f"🟡 已软删除（标记屏蔽）: {file_name}，物理数据仍保留，查询已不可见。")
-
-    def hard_delete(self) -> None:
-        """
-        硬删除：耗时操作，建议定期执行。
-        原理：从 docstore 中提取所有未被软删的文档，彻底丢弃已删除数据并重构索引。
-        """
-        if not self.soft_deleted_sources:
-            print("💡 暂无软删除标记，无需清理。")
+        if not os.path.exists(file_path):
+            print(f"⚠️ 文件不存在: {file_path}")
             return
 
-        # self.vectorstore.docstore._dict 存储了 ID 到 Document 对象的映射
-        all_docs = self.vectorstore.docstore._dict.values()
+        file_name = os.path.basename(file_path)
+        add_time = datetime.now(BEIJING_TZ)
 
-        # 过滤出需要保留的文档
-        remaining_docs = [
-            doc
-            for doc in all_docs
-            if doc.metadata.get("doc_id") not in self.soft_deleted_sources
-            and doc.metadata.get("doc_id") != "system"
-        ]
+        # 覆写：先删除该文档的所有旧切片
+        self.vectorstore.delete(where={"doc_id": file_name})
 
-        if remaining_docs:
-            # 彻底重建 FAISS 索引（释放物理空间）
-            self.vectorstore = FAISS.from_documents(remaining_docs, self.embeddings)
-            self.vectorstore.save_local(self.index_path)
-        else:
-            # 如果文档被删光了，则重置库
-            if os.path.exists(self.index_path):
-                shutil.rmtree(self.index_path)
-            self._load_or_create()
+        try:
+            # 自动选择加载器并解析
+            loader = self._get_loader(file_path)
+            docs = loader.load()
 
-        # 清空软删除名单，因为数据已经从物理上抹除了
-        self.soft_deleted_sources.clear()
-        print("🔥 硬删除完成：索引已重构，过时数据已被物理清除。")
+            # 文本切分
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP, add_start_index=True
+            )
+            splits = text_splitter.split_documents(docs)
+
+            for split in splits:
+                split.metadata["doc_id"] = file_name
+                split.metadata["add_time"] = add_time.isoformat()
+
+            # 添加新切片
+            self.vectorstore.add_documents(documents=splits)
+            print(f"✅ 文档 '{file_name}' ({len(splits)} 个切片) 已成功入库/覆盖")
+
+        except Exception as e:
+            print(f"❌ 解析文件 {file_name} 出错: {e}")
+
+    def delete_document(self, file_name: str) -> None:
+        """
+        删除文档：直接从数据库中物理删除该文档的所有切片。
+        """
+        self.vectorstore.delete(where={"doc_id": file_name})
+        print(f"🔥 已物理删除文档: {file_name}")
 
     def search(
         self,
         query: str,
         k: int = DEFAULT_SEARCH_K,
         t: float = SIMILARITY_THRESHOLD,
-    ) -> list[Document]:
+    ) -> List[Dict[str, Any]]:
         """
-        查询：在相似度搜索的基础上增加实时过滤逻辑。
-        :param query: 用户提出的问题
-        :param k: 返回最相关的结果数量，默认为3
+        查询：返回包含内容、来源ID和添加时间的字典列表。
         """
+        # 直接搜索，Chroma 内部会处理空库情况
+        docs_and_scores = self.vectorstore.similarity_search_with_score(query, k=k)
 
-        # 过滤被软删除的文档
-        docs_and_scores = self.vectorstore.similarity_search_with_score(
-            query,
-            k=k,
-            filter=lambda m: m.get("doc_id") not in self.soft_deleted_sources,
-        )
+        formatted_results = []
+        for doc, score in docs_and_scores:
+            # 应用相似度阈值过滤，在 Cosine Distance 下，score 越小代表越相关
+            if score <= t:
+                formatted_results.append(
+                    {
+                        "content": doc.page_content,
+                        "doc_id": doc.metadata.get("doc_id"),
+                        "add_time": doc.metadata.get("add_time"),
+                        "score": round(float(score), 4),
+                    }
+                )
+        return formatted_results
 
-        # 根据阈值过滤（使用 FAISS 默认的 L2 距离）
-        return [doc for doc, score in docs_and_scores if score < t]
+    def get_overview(self) -> Dict[str, Any]:
+        """
+        概览：显示当前向量库的状态，包括文档列表和更新统计。
+        """
+        # 仅获取元数据，避免在大规模库中加载所有文本导致 OOM
+        all_data = self.vectorstore.get(include=["metadatas"])
+        metadatas = all_data.get("metadatas", [])
+
+        # 获取目录创建时间作为“库创建时间”
+        if os.path.exists(self.persist_directory):
+            ctime = os.path.getctime(self.persist_directory)
+            create_time_str = datetime.fromtimestamp(ctime, BEIJING_TZ).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        else:
+            create_time_str = "Unknown"
+
+        doc_stats = {}
+        for meta in metadatas:
+            did = meta.get("doc_id")
+            atime = meta.get("add_time")
+            if did:
+                # 保留该文档最新的时间记录
+                if did not in doc_stats or atime > doc_stats[did]:
+                    doc_stats[did] = atime
+
+        sorted_docs = sorted(doc_stats.items(), key=lambda x: x[1], reverse=True)
+        latest_update = sorted_docs[0][1] if sorted_docs else "N/A"
+
+        print("\n" + "=" * 25 + " 向量库实时概览 " + "=" * 25)
+        print(f"📁 路径: {self.persist_directory} | 📅 创建: {create_time_str}")
+        print(f"🕒 更新: {latest_update}")
+        print(f"📊 规模: {len(metadatas)} 切片 | {len(doc_stats)} 文档")
+
+        if sorted_docs:
+            print("📜 文档清单:")
+            for name, time in sorted_docs:
+                # 将 iso 格式转回易读格式
+                display_time = datetime.fromisoformat(time).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                print(f"  - {name:<20} | 导入时间: {display_time}")
+        else:
+            print("📜 文档清单: (空)")
+        print("=" * 66 + "\n")
+
+        return {"total_chunks": len(metadatas)}
 
     def reset_index(self) -> None:
         """
         一键初始化/重置向量库：
-        彻底删除磁盘上的索引文件并清空内存状态，恢复到初始空库状态。
+        彻底删除磁盘上的索引文件并恢复到初始空库状态。
         """
-
-        # 1. 物理删除本地索引目录
-        if os.path.exists(self.index_path):
-            try:
-                shutil.rmtree(self.index_path)
-                print(f"🧹 已物理删除本地索引目录: {self.index_path}")
-            except Exception as e:
-                print(f"⚠️ 删除索引目录失败: {e}")
-
-        # 2. 清空内存中的软删除记录
-        self.soft_deleted_sources.clear()
-
-        # 3. 调用初始化方法重新创建空库
-        self._load_or_create()
+        self._load_or_create(is_reset=True)
         print("✨ 向量库已完成一键重置。")
 
 
 if __name__ == "__main__":
-    # 1. 模拟生成两个测试文件
-    with open("doc_recipe_1.txt", "w", encoding="utf-8") as f:
-        f.write("红烧肉的秘诀是五花肉要切成3厘米见方的块，加冰糖小火慢炖。")
-    with open("doc_recipe_2.txt", "w", encoding="utf-8") as f:
-        f.write("回锅肉的关键是先将肉煮至六七成熟，起锅后再切薄片回锅。")
-
+    # --- 测试流程 ---
     manager = VectorKBManager()
 
-    # 测试添加
-    manager.add_document("doc_recipe_1.txt")
-    manager.add_document("doc_recipe_2.txt")
+    # 1. 创建多个测试文档
+    files_to_test = {
+        "test_f1.txt": "华为是全球领先的 ICT（信息与通信）基础设施和智能终端提供商。",
+        "test_f2.md": "# Python简介\nPython 是一种广泛运用于人工智能开发的高级编程语言。",
+    }
 
-    # 2. 软删除测试：删除“红烧肉”
-    print("\n>>> 执行软删除: doc_recipe_1.txt")
-    manager.soft_delete("doc_recipe_1.txt")
+    print("--- 开始测试：添加文档 ---")
+    for filename, content in files_to_test.items():
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(content)
+        manager.add_document(filename)
 
-    # 查询验证：搜红烧肉应该搜不到（或搜到无关内容），搜回锅肉正常
-    print("\n>>> 软删除后查询 '红烧肉'：")
-    res = manager.search("红烧肉")
-    if not res:
-        print("（符合预期：未找到相关结果）")
-    for doc in res:
-        print(f"找到内容: {doc.page_content} | 来源: {doc.metadata['doc_id']}")
+    # 2. 测试覆写逻辑（再次添加同名文件）
+    print("\n--- 开始测试：覆写文档 ---")
+    manager.add_document("test_f1.txt")
 
-    # 3. 硬删除测试：清理存储空间
-    print("\n>>> 执行硬删除清理物理空间...")
-    manager.hard_delete()
+    # 3. 搜索展示（测试有效搜索和无效搜索）
+    print("\n--- 开始测试：搜索功能 ---")
+    test_queries = ["华为", "人工智能", "西瓜"]
+    for q in test_queries:
+        print(f">>> 搜索关键词: [{q}]")
+        res = manager.search(q)
+        if not res:
+            print("    (无结果)")
+        for r in res:
+            print(
+                f"    内容: {r['content']} | 评分: {r['score']} | 来源: {r['doc_id']}"
+            )
 
-    # 4. 再次查询
-    print("\n>>> 最终查询 '回锅肉'：")
-    res_final = manager.search("回锅肉")
-    for doc in res_final:
-        print(f"找到内容: {doc.page_content} | 来源: {doc.metadata['doc_id']}")
+    # 4. 查看概览
+    manager.get_overview()
 
-    # 现场清理：删除测试用的 txt 文件
-    for f in ["doc_recipe_1.txt", "doc_recipe_2.txt"]:
-        if os.path.exists(f):
-            os.remove(f)
+    # 5. 删除测试
+    print("--- 开始测试：删除文档 ---")
+    manager.delete_document("test_f1.txt")
+    manager.get_overview()
+
+    # 6. 重置测试
+    print("--- 开始测试：重置向量库 ---")
+    manager.reset_index()
+    manager.get_overview()
+
+    # 清理测试产生的本地文件
+    for filename in files_to_test.keys():
+        if os.path.exists(filename):
+            os.remove(filename)
+    # 如果希望测试完彻底删除数据库目录，可以取消下面注释
+    # if os.path.exists(CHROMA_PATH): shutil.rmtree(CHROMA_PATH)
+    print("✅ 测试流程结束，临时文件已清理。")
