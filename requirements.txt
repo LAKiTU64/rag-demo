@@ -1,0 +1,15 @@
+# RAG 相关依赖
+langchain==0.1.16
+langchain-huggingface==0.0.3
+langchain-community==0.0.38
+faiss-cpu==1.8.0
+transformers==4.39.3
+torch==2.2.2
+
+# HuggingFace 嵌入模型相关
+huggingface-hub==0.20.3
+sentence-transformers==2.6.1
+
+# 基础库
+numpy==1.24.3
+pandas==2.2.2

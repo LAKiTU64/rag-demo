@@ -1,14 +1,9 @@
 [tool.ruff]
-# 选择要启用的规则集
-select = [
-    "E",   # pycodestyle 错误
-    "F",   # Pyflakes
-    "I",   # isort (自动排序导入)
-    "B",   # flake8-bugbear (发现潜在的 Bug)
-    "UP",  # pyupgrade (自动升级旧语法)
-]
-ignore = []
+# 选择检查规则，E/W 是基础语法，F 是逻辑错误，I 是导入排序
+select = ["E", "W", "F", "I", "B"] 
+# 忽略某些过于严苛的规则（比如行长）
+ignore = ["E501"]
 
 [tool.ruff.lint]
-# 只要是违反规则，一律视为错误 (标红)
-preview = true
+# 类似 PyCharm 的“自动修复”功能
+fixable = ["ALL"]
