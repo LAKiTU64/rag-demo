@@ -1,4 +1,15 @@
 # main.py
+
+__import__("pysqlite3")
+import sys
+
+sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
+
+import os
+
+# 使用国内镜像源下载 HuggingFace 模型
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
 from llm_loader import load_qwen3_14b_local
 from rag_agent import create_rag_chain
 from VectorKBManager import VectorKBManager

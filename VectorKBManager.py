@@ -214,18 +214,23 @@ class VectorKBManager:
         """
         返回一个兼容 LangChain 的 Retriever 对象。
         """
-        
+        from typing import List
+
         from langchain_core.documents import Document
         from langchain_core.retrievers import BaseRetriever
+        from pydantic import PrivateAttr
 
         class ChromaRetriever(BaseRetriever):
-            def __init__(self, kb_manager, k=DEFAULT_SEARCH_K, t=SIMILARITY_THRESHOLD):
-                self.kb_manager = kb_manager
-                self.k = k
-                self.t = t
+            k: int = DEFAULT_SEARCH_K
+            t: float = SIMILARITY_THRESHOLD
+            _kb_manager: VectorKBManager = PrivateAttr()
 
-            def _get_relevant_documents(self, query: str):
-                results = self.kb_manager.search(query, k=self.k, t=self.t)
+            def __init__(self, kb_manager, k=DEFAULT_SEARCH_K, t=SIMILARITY_THRESHOLD):
+                super().__init__(k=k, t=t)
+                self._kb_manager = kb_manager
+
+            def _get_relevant_documents(self, query: str) -> List[Document]:
+                results = self._kb_manager.search(query, k=self.k, t=self.t)
                 docs = [
                     Document(
                         page_content=r["content"],
@@ -235,7 +240,13 @@ class VectorKBManager:
                 ]
                 return docs
 
-        return ChromaRetriever(self, **(search_kwargs or {}))
+        # 从 search_kwargs 中提取正确的参数
+        kwargs = search_kwargs or {}
+        k = kwargs.get('k', DEFAULT_SEARCH_K)
+        t = kwargs.get('t', SIMILARITY_THRESHOLD)
+        
+        return ChromaRetriever(kb_manager=self, k=k, t=t)
+
 
 
 if __name__ == "__main__":
