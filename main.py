@@ -17,6 +17,8 @@ from VectorKBManager import VectorKBManager
 if __name__ == "__main__":
     # 1. 加载向量库
     kb = VectorKBManager()
+    
+    kb.add_document("~/projects/rag-demo/test_doc.txt")
 
     # 2. 加载本地 LLM
     print("正在加载 Qwen3-14B 模型...")
