@@ -38,9 +38,9 @@ def load_local_llm(model_path):
     """加载本地 HuggingFace 模型并包装为 LangChain LLM"""
     print(f"⏳ 正在加载本地模型: {model_path} ...")
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=model_path, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
-            model_path,
+            pretrained_model_name_or_path=model_path,
             device_map="auto",
             dtype=torch.float16,
             trust_remote_code=True,
