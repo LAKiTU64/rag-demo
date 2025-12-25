@@ -210,48 +210,55 @@ class VectorKBManager:
         self._load_or_create(is_reset=True)
         print("✨ 向量库已完成一键重置。")
 
-    def as_retriever(self, search_kwargs: dict = None):
+    def as_retriever(self, **kwargs):
         """
         返回一个兼容 LangChain 的 Retriever 对象。
+        内部直接调用 VectorKBManager.search 方法，保持检索逻辑统一。
         """
+        
         from typing import List
-
         from langchain_core.documents import Document
         from langchain_core.retrievers import BaseRetriever
         from pydantic import PrivateAttr
 
-        class ChromaRetriever(BaseRetriever):
+        # 定义内部类继承 BaseRetriever
+        class KBRetriever(BaseRetriever):
+            _kb_manager: VectorKBManager = PrivateAttr()
             k: int = DEFAULT_SEARCH_K
             t: float = SIMILARITY_THRESHOLD
-            _kb_manager: VectorKBManager = PrivateAttr()
 
-            def __init__(self, kb_manager, k=DEFAULT_SEARCH_K, t=SIMILARITY_THRESHOLD):
-                super().__init__(k=k, t=t)
+            def __init__(self, kb_manager, k, t, **data):
+                super().__init__(**data)
                 self._kb_manager = kb_manager
+                self.k = k
+                self.t = t
 
             def _get_relevant_documents(self, query: str) -> List[Document]:
-                results = self._kb_manager.search(query, k=self.k, t=self.t)
-                docs = [
+                search_results = self._kb_manager.search(query, k=self.k, t=self.t)
+
+                # 将字典列表转换为 Document 对象列表，以便下游 LangChain 链使用
+                return [
                     Document(
-                        page_content=r["content"],
-                        metadata={"doc_id": r["doc_id"], "score": r["score"]},
+                        page_content=res["content"],
+                        metadata={
+                            "doc_id": res["doc_id"],
+                            "add_time": res["add_time"],
+                            "score": res["score"],
+                        },
                     )
-                    for r in results
+                    for res in search_results
                 ]
-                return docs
 
-        # 从 search_kwargs 中提取正确的参数
-        kwargs = search_kwargs or {}
-        k = kwargs.get('k', DEFAULT_SEARCH_K)
-        t = kwargs.get('t', SIMILARITY_THRESHOLD)
-        
-        return ChromaRetriever(kb_manager=self, k=k, t=t)
+        # 提取参数并实例化
+        k = kwargs.get("k", DEFAULT_SEARCH_K)
+        t = kwargs.get("t", SIMILARITY_THRESHOLD)
 
+        return KBRetriever(kb_manager=self, k=k, t=t)
 
 
 if __name__ == "__main__":
     # --- 测试流程 ---
-    manager = VectorKBManager()
+    kb = VectorKBManager()
 
     # 1. 创建多个测试文档
     files_to_test = {
@@ -263,18 +270,18 @@ if __name__ == "__main__":
     for filename, content in files_to_test.items():
         with open(filename, "w", encoding="utf-8") as f:
             f.write(content)
-        manager.add_document(filename)
+        kb.add_document(filename)
 
     # 2. 测试覆写逻辑（再次添加同名文件）
     print("\n--- 开始测试：覆写文档 ---")
-    manager.add_document("test_f1.txt")
+    kb.add_document("test_f1.txt")
 
     # 3. 搜索展示（测试有效搜索和无效搜索）
     print("\n--- 开始测试：搜索功能 ---")
     test_queries = ["华为", "人工智能", "西瓜"]
     for q in test_queries:
         print(f">>> 搜索关键词: [{q}]")
-        res = manager.search(q)
+        res = kb.search(q)
         if not res:
             print("    (无结果)")
         for r in res:
@@ -283,22 +290,24 @@ if __name__ == "__main__":
             )
 
     # 4. 查看概览
-    manager.get_overview()
+    kb.get_overview()
 
     # 5. 删除测试
     print("--- 开始测试：删除文档 ---")
-    manager.delete_document("test_f1.txt")
-    manager.get_overview()
+    kb.delete_document("test_f1.txt")
+    kb.get_overview()
 
     # 6. 重置测试
     print("--- 开始测试：重置向量库 ---")
-    manager.reset_index()
-    manager.get_overview()
+    kb.reset_index()
+    kb.get_overview()
 
     # 清理测试产生的本地文件
     for filename in files_to_test.keys():
         if os.path.exists(filename):
             os.remove(filename)
-    # 如果希望测试完彻底删除数据库目录，可以取消下面注释
-    # if os.path.exists(CHROMA_PATH): shutil.rmtree(CHROMA_PATH)
+
+    # 彻底删除数据库目录，可以取消下面注释
+    if os.path.exists(CHROMA_PATH):
+        shutil.rmtree(CHROMA_PATH)
     print("✅ 测试流程结束，临时文件已清理。")
