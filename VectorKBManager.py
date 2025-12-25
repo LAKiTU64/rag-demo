@@ -210,6 +210,33 @@ class VectorKBManager:
         self._load_or_create(is_reset=True)
         print("✨ 向量库已完成一键重置。")
 
+    def as_retriever(self, search_kwargs: dict = None):
+        """
+        返回一个兼容 LangChain 的 Retriever 对象。
+        """
+        
+        from langchain_core.documents import Document
+        from langchain_core.retrievers import BaseRetriever
+
+        class ChromaRetriever(BaseRetriever):
+            def __init__(self, kb_manager, k=DEFAULT_SEARCH_K, t=SIMILARITY_THRESHOLD):
+                self.kb_manager = kb_manager
+                self.k = k
+                self.t = t
+
+            def _get_relevant_documents(self, query: str):
+                results = self.kb_manager.search(query, k=self.k, t=self.t)
+                docs = [
+                    Document(
+                        page_content=r["content"],
+                        metadata={"doc_id": r["doc_id"], "score": r["score"]},
+                    )
+                    for r in results
+                ]
+                return docs
+
+        return ChromaRetriever(self, **(search_kwargs or {}))
+
 
 if __name__ == "__main__":
     # --- 测试流程 ---
