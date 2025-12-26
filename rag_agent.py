@@ -1,4 +1,5 @@
 import torch
+import os
 
 # --- LangGraph 核心组件 ---
 from langgraph.graph import StateGraph, END, START
@@ -18,7 +19,8 @@ from typing import Annotated, Sequence, TypedDict, Literal
 from VectorKBManager import VectorKBManager
 
 # --- Config ---
-MODEL_PATH = "/workspaces/rag-demo/.models/Qwen/Qwen3-4B"
+# MODEL_PATH = "/workspaces/rag-demo/.models/Qwen/Qwen3-4B
+MODEL_PATH = os.path.join(os.getcwd(), ".models", "Qwen", "Qwen3-4B")
 
 
 # ==============================================================================
