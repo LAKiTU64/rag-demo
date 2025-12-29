@@ -1,0 +1,97 @@
+# AI Agent LLM性能分析器 - 配置文件
+
+# ============================================================
+# 重要：请修改以下路径为你的实际路径
+# ============================================================
+
+# SGlang代码路径（必须配置）
+sglang_path: "/sgl-workspace/sglang/python/sglang"
+# 示例：
+# - Windows: "D:/Code/sglang" 或 "C:/Users/xxx/sglang"
+# - Linux: "/home/user/sglang"
+
+# 模型文件路径（必须配置）
+models_path: "/workspace/"
+# 示例：
+# - Windows: "D:/Models" 或 "C:/Users/xxx/models"
+# - Linux: "/data/models"
+
+# ============================================================
+# 服务器配置
+# ============================================================
+
+server:
+  host: "0.0.0.0"
+  port: 9001
+
+# SGlang服务配置
+sglang_service:
+  host: "127.0.0.1"
+  port: 30000
+
+# ============================================================
+# 模型映射（模型别名 -> 实际路径）
+# ============================================================
+
+model_mappings:
+  # 格式：别名: 路径
+  # 路径可以是：
+  # 1. 相对于 models_path 的相对路径
+  # 2. 绝对路径
+  # 3. HuggingFace模型ID
+  
+  "llama-7b": "Llama-2-7b-hf"
+  "llama-13b": "Llama-2-13b-hf"
+  "qwen-7b": "Qwen-7B-Chat"
+  "qwen-14b": "Qwen-14B-Chat"
+  "chatglm-6b": "chatglm-6b"
+  
+  # 如果使用绝对路径：
+  # "llama-7b": "D:/Models/Llama-2-7b-hf"
+  
+  # 如果使用HuggingFace ID：
+  # "llama-7b": "meta-llama/Llama-2-7b-hf"
+
+# ============================================================
+# 分析参数默认值
+# ============================================================
+
+analysis_defaults:
+  batch_size: [1, 8, 16]
+  input_len: [128]
+  output_len: [1]
+  temperature: 0.0
+  tp_size: 1
+  profile_steps: 3
+
+# ============================================================
+# 性能分析工具配置
+# ============================================================
+
+profiling_tools:
+  nsys:
+    enabled: true
+    # timeout: 600  # 秒
+  
+  ncu:
+    enabled: true
+    # timeout: 600  # 秒
+    # max_kernels: 5  # 最多分析的kernel数量
+
+# ============================================================
+# 输出配置
+# ============================================================
+
+output:
+  results_dir: "analysis_results"
+  save_reports: true
+  report_formats: ["txt", "json", "markdown"]
+
+# ============================================================
+# 日志配置
+# ============================================================
+
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+
