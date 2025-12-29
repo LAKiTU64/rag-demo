@@ -1,0 +1,13 @@
+{
+  "name": "RAG-Demo-Env",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "runArgs": [
+    "--gpus=all"
+  ],
+  "mounts": [
+    // 将插件目录映射到 Docker 命名卷，重构也不会丢失已下载的插件文件
+    "source=vscode-extensions,target=/root/.vscode-server/extensions,type=volume"
+  ]
+}
