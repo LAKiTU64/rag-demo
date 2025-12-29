@@ -5,6 +5,8 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
+import torch
+
 from langchain_community.document_loaders import (
     Docx2txtLoader,
     PyPDFLoader,
@@ -16,11 +18,11 @@ from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# 使用国内镜像源下载 HuggingFace 模型
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+# 严格使用本地嵌入模型（不允许联网下载）
+# 请将本地模型放在 EMBEDDING_MODEL 指定的路径，或修改 EMBEDDING_MODEL 值
 
 # --- Config ---
-EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
+EMBEDDING_MODEL = "./.models/BAAI/bge-small-zh-v1.5"
 INDEX_PATH = "./faiss_index"
 CHUNK_SIZE = 300  # 如果回答总是“断章取义”，需要把这个值调大；如果发现 LLM 总是找不到重点，可能需要调小。
 CHUNK_OVERLAP = 30  # 如果切分后的句子经常出现“前因后果”不连贯，需要调小这个值。
@@ -38,9 +40,17 @@ class VectorKBManager:
 
     def __init__(self, index_path="./faiss_index") -> None:
         self.index_path = index_path
-        # 初始化 Embedding，建议开启 normalize_embeddings 以配合阈值过滤
+        # 初始化 Embedding：严格使用本地模型（不允许联网下载）
+        if not os.path.exists(EMBEDDING_MODEL):
+            raise FileNotFoundError(
+                f"本地嵌入模型未找到: {EMBEDDING_MODEL}. 请将模型放置在该路径或修改 EMBEDDING_MODEL 配置。"
+            )
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model_kwargs = {"device": device, "local_files_only": True}
         self.embeddings = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL, encode_kwargs={"normalize_embeddings": True}
+            model_name=EMBEDDING_MODEL,
+            model_kwargs=model_kwargs,
+            encode_kwargs={"normalize_embeddings": True},
         )
         self.vectorstore = None
 

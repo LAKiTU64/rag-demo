@@ -1,0 +1,504 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+AI Agent核心模块 - 集成NSys和NCU性能分析
+"""
+
+import re
+import os
+import sys
+import asyncio
+import subprocess
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+
+# 导入分析工具
+from utils.nsys_to_ncu_analyzer import NSysToNCUAnalyzer, create_sglang_analysis_workflow
+from .offline_llm import get_offline_qwen_client
+
+OFFLINE_QWEN_PATH = Path(os.getenv("QWEN_LOCAL_MODEL_PATH", "/workspace/Qwen3-32B"))
+
+class AIAgent:
+    """AI Agent核心类 - 自动化性能分析"""
+    
+    def __init__(self, config: Dict):
+        self.config = config
+        self.sglang_path = Path(config.get('sglang_path', 'SGlang'))
+        self.models_path = Path(config.get('models_path', 'models'))
+        self.model_mappings = config.get('model_mappings', {})
+        self.results_dir = Path(config.get('output', {}).get('results_dir', 'analysis_results'))
+        self.results_dir.mkdir(exist_ok=True)
+        
+        # 分析工具配置
+        self.profiling_config = config.get('profiling_tools', {})
+        self.analysis_defaults = config.get('analysis_defaults', {})
+
+        # 缓存最近一次分析的关键信息，便于对外接口复用
+        self.last_analysis_dir: Optional[str] = None
+        self.last_analysis_dirs: List[str] = []
+        self.last_analysis_reports: List[str] = []
+        self.last_analysis_table: Optional[str] = None
+        
+    async def process_message(self, message: str) -> str:
+        """处理用户消息并执行分析"""
+        
+        # 提取模型名称
+        model_name = self._extract_model_name(message)
+        
+        # 提取分析类型
+        analysis_type = self._extract_analysis_type(message)
+        
+        # 提取参数
+        params = self._extract_parameters(message)
+        
+        # 如果没有提供参数，使用默认值
+        if not params.get('batch_size'):
+            params['batch_size'] = self.analysis_defaults.get('batch_size', [1])
+        if not params.get('input_len'):
+            params['input_len'] = self.analysis_defaults.get('input_len', [128])
+        if not params.get('output_len'):
+            params['output_len'] = self.analysis_defaults.get('output_len', [1])
+        
+        # 生成初始响应
+        response = f"""✅ **已解析您的请求**
+
+🤖 **模型**: {model_name or '未指定'}
+🔬 **分析类型**: {analysis_type}
+📊 **参数**:
+  • batch_size: {params.get('batch_size', [])}
+  • input_len: {params.get('input_len', [])}
+  • output_len: {params.get('output_len', [])}
+
+"""
+        
+        # 如果模型名称明确，执行实际分析
+        if model_name:
+            # 获取模型路径
+            model_path = self._resolve_model_path(model_name)
+            
+            if not model_path:
+                response += f"""
+❌ **错误**: 未找到模型 '{model_name}'
+📋 可用模型: {', '.join(self.model_mappings.keys())}
+
+💡 **提示**: 请在 config.yaml 中配置模型路径
+"""
+                return response
+            
+            response += f"""🚀 **开始分析...**
+
+📁 模型路径: {model_path}
+⏳ 预计时间: 3-10分钟（取决于参数组合数量）
+
+"""
+            
+            # 执行分析（异步）
+            try:
+                analysis_results = await self._run_analysis(
+                    model_path=model_path,
+                    analysis_type=analysis_type,
+                    params=params
+                )
+                
+                response += analysis_results
+                
+            except Exception as e:
+                response += f"""
+❌ **分析失败**: {str(e)}
+
+💡 **可能原因**:
+1. NSys/NCU工具未安装或未在PATH中
+2. 模型路径不正确
+3. GPU不可用或驱动问题
+4. 参数配置错误
+
+🔧 **调试步骤**:
+1. 运行 `nsys --version` 和 `ncu --version` 检查工具
+2. 运行 `nvidia-smi` 检查GPU
+3. 检查模型路径是否存在
+"""
+        else:
+            response += """
+💡 **下一步**:
+请指定要分析的模型名称，例如：
+• "分析 llama-7b"
+• "对 qwen-14b 进行性能分析"
+• "使用 ncu 深度分析 chatglm-6b"
+
+📋 **可用模型**: """ + ', '.join(self.model_mappings.keys())
+        
+        return response
+    
+    async def _run_analysis(self, model_path: str, analysis_type: str, params: Dict) -> str:
+        """执行实际的性能分析"""
+        
+        results = []
+
+        # 重置缓存，防止使用陈旧结果
+        self.last_analysis_table = None
+        self.last_analysis_reports = []
+        self.last_analysis_dirs = []
+        self.last_analysis_dir = None
+        
+        # 获取参数组合
+        batch_sizes = params.get('batch_size', [1])
+        input_lens = params.get('input_len', [128])
+        output_lens = params.get('output_len', [1])
+        
+        # 只分析第一组参数（避免时间过长）
+        batch_size = batch_sizes[0] if isinstance(batch_sizes, list) else batch_sizes
+        input_len = input_lens[0] if isinstance(input_lens, list) else input_lens
+        output_len = output_lens[0] if isinstance(output_lens, list) else output_lens
+        
+        try:
+            # 创建分析工作流
+            analysis_workflow = create_sglang_analysis_workflow()
+            
+            # 执行分析
+            workflow_output = await asyncio.get_event_loop().run_in_executor(
+                None,
+                analysis_workflow,
+                str(model_path),
+                batch_size,
+                input_len,
+                output_len
+            )
+
+            run_records: List[Tuple[str, Path]] = []
+            if isinstance(workflow_output, list):
+                for idx, item in enumerate(workflow_output):
+                    gpu_label: str
+                    output_path: Optional[str] = None
+                    if isinstance(item, dict):
+                        gpu_label = str(item.get('gpu', idx))
+                        output_path = item.get('dir') or item.get('path')
+                    else:
+                        gpu_label = str(idx)
+                        output_path = str(item)
+                    if output_path:
+                        run_records.append((gpu_label, Path(output_path)))
+            elif workflow_output:
+                run_records.append(("0", Path(str(workflow_output))))
+
+            if not run_records:
+                results.append("⚠️ **分析已完成，但未找到输出目录**")
+                return '\n'.join(results)
+
+            self.last_analysis_dirs = [str(path) for _, path in run_records]
+
+            report_infos = []
+            missing_reports = []
+            for idx, (gpu_label, output_dir) in enumerate(run_records):
+                report_path = output_dir / "integrated_performance_report.md"
+                if report_path.exists():
+                    report_text = report_path.read_text(encoding='utf-8')
+                    report_infos.append({
+                        'gpu': gpu_label,
+                        'dir': output_dir,
+                        'report': report_path,
+                        'text': report_text,
+                        'index': idx
+                    })
+                else:
+                    missing_reports.append(output_dir)
+
+            if not report_infos:
+                dir_lines = '\n'.join(f"  • {path}" for _, path in run_records)
+                results.append(f"""
+⚠️ **分析已完成，但未生成报告文件**
+
+📁 结果目录:
+{dir_lines}
+💡 请检查目录中的其他输出文件
+""")
+                return '\n'.join(results)
+
+            primary_info = report_infos[0]
+            self.last_analysis_dir = str(primary_info['dir'])
+            self.last_analysis_reports = [str(info['report']) for info in report_infos]
+            summary = self._extract_report_summary(primary_info['text'])
+
+            try:
+                loop = asyncio.get_event_loop()
+                if len(report_infos) > 1:
+                    table_markdown = self._generate_multi_gpu_table(
+                        [info['text'] for info in report_infos],
+                        [info['gpu'] for info in report_infos]
+                    )
+                else:
+                    table_markdown = await loop.run_in_executor(
+                        None,
+                        self._generate_report_table,
+                        primary_info['text']
+                    )
+            except Exception as table_exc:
+                table_markdown = f"⚠️ 表格生成失败: {table_exc}"
+
+            self.last_analysis_table = table_markdown
+
+            dir_lines = '\n'.join(
+                f"  • {self._format_gpu_label(info['gpu'], info['index'])}: {info['dir']}" for info in report_infos
+            )
+
+            missing_lines = ''
+            if missing_reports:
+                missing_lines = '\n'.join(f"  • {path}" for path in missing_reports)
+                missing_lines = f"\n⚠️ 未找到以下目录的报告文件:\n{missing_lines}\n"
+
+            results.append(f"""
+✅ **分析完成!**
+
+📁 **结果目录**:
+{dir_lines}
+📄 **报告文件**: {primary_info['report']}
+{missing_lines}
+{summary}
+
+📌 **热点Kernel表格预览**:
+{table_markdown}
+
+🔍 **详细报告**: 请查看 {primary_info['report']}
+📊 **可视化图表**: 请查看对应结果目录中的图片文件
+""")
+            
+        except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            results.append(f"""
+❌ **分析执行失败**
+
+错误信息: {str(e)}
+
+详细错误:
+```
+{error_detail}
+```
+
+💡 **常见问题解决**:
+1. 确保已安装 nsys 和 ncu 工具
+2. 确保 SGlang 已正确安装
+3. 确保模型文件路径正确
+4. 确保有足够的 GPU 内存
+""")
+        
+        return '\n'.join(results)
+
+    @staticmethod
+    def _generate_report_table(report_text: str) -> str:
+        client = get_offline_qwen_client(OFFLINE_QWEN_PATH)
+        return client.report_to_table(report_text)
+
+    def _generate_multi_gpu_table(self, report_texts: List[str], gpu_labels: List[str]) -> str:
+        if not report_texts:
+            return "⚠️ 未找到可用的报告内容"
+
+        parsed_entries = [self._parse_kernel_entries_from_report(text) for text in report_texts]
+        if not parsed_entries or not parsed_entries[0]:
+            return "⚠️ 未能解析多GPU表格数据"
+
+        label_cells = [self._format_gpu_label(lbl, idx) for idx, lbl in enumerate(gpu_labels)]
+        header_cells = ["Kernel"]
+        for lbl in label_cells:
+            header_cells.extend([f"{lbl} Duration(ms)", f"{lbl} Ratio(%)"])
+
+        header = "| " + " | ".join(header_cells) + " |"
+        divider = "| " + " | ".join(["---"] * len(header_cells)) + " |"
+
+        max_len = max(len(entries) for entries in parsed_entries)
+        rows = []
+        for idx in range(max_len):
+            name_candidates = []
+            for entries in parsed_entries:
+                if idx < len(entries) and entries[idx]['name']:
+                    name_candidates.append(entries[idx]['name'])
+            base_name = name_candidates[0] if name_candidates else f"Kernel {idx + 1}"
+            alt_names = {nm for nm in name_candidates if nm != base_name}
+            if alt_names:
+                merged_name = base_name + " / " + " / ".join(sorted(alt_names))
+            else:
+                merged_name = base_name
+
+            row_cells = [merged_name]
+            for entries in parsed_entries:
+                if idx < len(entries):
+                    row_cells.append(entries[idx]['duration'])
+                    row_cells.append(entries[idx]['ratio'])
+                else:
+                    row_cells.extend(['', ''])
+            rows.append("| " + " | ".join(row_cells) + " |")
+
+        return "\n".join([header, divider, *rows])
+
+    def _parse_kernel_entries_from_report(self, report_text: str) -> List[Dict[str, str]]:
+        entries: List[Dict[str, str]] = []
+        lines = report_text.splitlines()
+        idx = 0
+        total_lines = len(lines)
+        while idx < total_lines:
+            raw_line = lines[idx]
+            if raw_line.strip().startswith('二、'):
+                break
+            match = re.match(r'^\s*\d+\.\s+(.*)$', raw_line)
+            if match:
+                name = match.group(1).strip()
+                duration = ''
+                ratio = ''
+                idx += 1
+                while idx < total_lines:
+                    line = lines[idx].strip()
+                    if line.startswith('- 执行时间'):
+                        dur_match = re.search(r'([0-9.]+)\s*ms', line)
+                        if dur_match:
+                            duration = dur_match.group(1)
+                    elif line.startswith('- 时间占比'):
+                        ratio_match = re.search(r'([0-9.]+)\s*%', line)
+                        if ratio_match:
+                            ratio = ratio_match.group(1)
+                    elif re.match(r'^\s*\d+\.', lines[idx]) or line.startswith('二、'):
+                        break
+                    idx += 1
+                entries.append({
+                    'name': name,
+                    'duration': duration,
+                    'ratio': ratio
+                })
+            else:
+                idx += 1
+        return entries
+
+    @staticmethod
+    def _format_gpu_label(label: str, index: int) -> str:
+        if not label:
+            return f"GPU{index}"
+        normalized = label.strip()
+        if not normalized:
+            return f"GPU{index}"
+        if normalized.lower().startswith('gpu'):
+            return normalized.upper()
+        return f"GPU{normalized}"
+    
+    def _extract_report_summary(self, report_content: str) -> str:
+        """从报告中提取关键摘要信息"""
+        
+        lines = report_content.split('\n')
+        summary_lines = []
+        
+        # 提取关键统计信息
+        for i, line in enumerate(lines):
+            if '总kernels数量' in line or '总kernel执行时间' in line:
+                summary_lines.append(line)
+            elif '🔥 识别的热点Kernels' in line:
+                # 提取前3个热点kernel
+                summary_lines.append("\n**🔥 热点Kernels (Top 3):**")
+                for j in range(i+1, min(i+10, len(lines))):
+                    if lines[j].strip() and lines[j].startswith(('1.', '2.', '3.')):
+                        summary_lines.append(lines[j][:100])
+                break
+        
+        if summary_lines:
+            return '\n'.join(summary_lines)
+        else:
+            return "**📊 分析报告已生成，请查看详细文件**"
+    
+    def _resolve_model_path(self, model_name: str) -> Optional[str]:
+        """解析模型路径"""
+        
+        # 检查是否在映射表中
+        if model_name in self.model_mappings:
+            mapped_path = self.model_mappings[model_name]
+            
+            # 如果是绝对路径，直接返回
+            if Path(mapped_path).is_absolute():
+                return mapped_path
+            
+            # 否则，相对于 models_path
+            full_path = self.models_path / mapped_path
+            return str(full_path)
+        
+        # 如果不在映射表中，尝试直接作为路径
+        if Path(model_name).exists():
+            return model_name
+        
+        # 尝试相对于 models_path
+        potential_path = self.models_path / model_name
+        if potential_path.exists():
+            return str(potential_path)
+        
+        return None
+    
+    def _extract_model_name(self, prompt: str) -> Optional[str]:
+        """提取模型名称"""
+        
+        # 首先检查已知的模型别名
+        for model_name in self.model_mappings.keys():
+            if model_name.lower() in prompt.lower():
+                return model_name
+        
+        # 然后使用正则表达式匹配通用模型名称模式
+        patterns = [
+            r'llama[^/\s]*-?\d*[^/\s]*-?\d+[bB]?',
+            r'qwen[^/\s]*-?\d*[^/\s]*-?\d+[bB]?',
+            r'chatglm[^/\s]*-?\d+[bB]?',
+            r'baichuan[^/\s]*-?\d+[bB]?',
+            r'vicuna[^/\s]*-?\d+[bB]?',
+            r'mistral[^/\s]*-?\d+[bB]?',
+            r'mixtral[^/\s]*-?\d+[bB]?',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, prompt, re.IGNORECASE)
+            if match:
+                return match.group(0)
+        
+        return None
+    
+    def _extract_analysis_type(self, prompt: str) -> str:
+        """提取分析类型"""
+        prompt_lower = prompt.lower()
+        
+        if 'ncu' in prompt_lower or 'kernel' in prompt_lower or '深度' in prompt_lower or 'nsight compute' in prompt_lower:
+            return 'ncu (深度kernel分析)'
+        elif 'nsys' in prompt_lower or '全局' in prompt_lower or 'nsight systems' in prompt_lower:
+            return 'nsys (全局性能分析)'
+        elif '集成' in prompt_lower or '综合' in prompt_lower or '完整' in prompt_lower:
+            return 'auto (集成分析: nsys + ncu)'
+        else:
+            return 'auto (集成分析: nsys + ncu)'
+    
+    def _extract_parameters(self, prompt: str) -> Dict:
+        """提取参数"""
+        params = {}
+        
+        # 提取batch_size
+        batch_match = re.search(r'batch[-_\s]*size?[：:\s=]*(\d+(?:\s*[,，]\s*\d+)*)', prompt, re.IGNORECASE)
+        if batch_match:
+            batch_sizes = [int(x.strip()) for x in re.split(r'[,，\s]+', batch_match.group(1)) if x.strip()]
+            params['batch_size'] = batch_sizes
+        
+        # 提取input_len
+        input_match = re.search(r'input[-_\s]*len[gth]*[：:\s=]*(\d+(?:\s*[,，]\s*\d+)*)', prompt, re.IGNORECASE)
+        if input_match:
+            input_lens = [int(x.strip()) for x in re.split(r'[,，\s]+', input_match.group(1)) if x.strip()]
+            params['input_len'] = input_lens
+        
+        # 提取output_len
+        output_match = re.search(r'output[-_\s]*len[gth]*[：:\s=]*(\d+(?:\s*[,，]\s*\d+)*)', prompt, re.IGNORECASE)
+        if output_match:
+            output_lens = [int(x.strip()) for x in re.split(r'[,，\s]+', output_match.group(1)) if x.strip()]
+            params['output_len'] = output_lens
+        
+        return params
+
+    def get_available_models(self) -> List[str]:
+        """获取可用的模型列表"""
+        return list(self.model_mappings.keys())
+    
+    def get_analysis_status(self) -> Dict:
+        """获取当前分析状态"""
+        return {
+            'available_models': self.get_available_models(),
+            'results_directory': str(self.results_dir),
+            'nsys_enabled': self.profiling_config.get('nsys', {}).get('enabled', True),
+            'ncu_enabled': self.profiling_config.get('ncu', {}).get('enabled', True),
+        }
