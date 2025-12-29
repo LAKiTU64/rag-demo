@@ -14,10 +14,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # --- Config ---
-# 请确保该路径下包含 config.json, pytorch_model.bin 或 model.safetensors 等文件
 EMBEDDING_MODEL = "./.models/BAAI/bge-small-zh-v1.5"
-CHROMA_PATH = "./chroma_db"
-CHUNK_SIZE = 300
+CHROMA_PATH = "./.chroma_db"
+CHUNK_SIZE = 200
 CHUNK_OVERLAP = 50
 DEFAULT_SEARCH_K = 3
 SIMILARITY_THRESHOLD = 0.5
@@ -104,7 +103,17 @@ class VectorKBManager:
             docs = loader.load()
 
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP, add_start_index=True
+                chunk_size=CHUNK_SIZE,
+                chunk_overlap=CHUNK_OVERLAP,
+                add_start_index=True,
+                separators=[
+                    "\n### ",  # 优先按 Kernel / 子模块
+                    "\n## ",  # 次级结构
+                    "\n\n",  # 段落
+                    "\n",  # 行
+                    " ",  # 词
+                    "",  # 最兜底
+                ],
             )
             splits = text_splitter.split_documents(docs)
 
@@ -224,10 +233,41 @@ class VectorKBManager:
 
 
 if __name__ == "__main__":
-    # 使用前请确保本地模型路径正确
+    # 1. 初始化（确保模型路径正确）
     try:
         kb = VectorKBManager()
-        kb.get_overview()
-        print("✅ 本地模型加载成功，向量库就绪。")
     except Exception as e:
-        print(f"❌ 初始化失败: {e}")
+        print(f"❌ 启动失败: {e}")
+        exit(1)
+
+    # 2. 指定测试目录
+    DOCS_DIR = "./documents"
+    if not os.path.exists(DOCS_DIR):
+        os.makedirs(DOCS_DIR)
+        with open(os.path.join(DOCS_DIR, "sample.txt"), "w", encoding="utf-8") as f:
+            f.write("这是一个本地测试文档。")
+
+    # --- 3. 核心测试：直接遍历并调用 add_document ---
+    print(f"\n🚀 开始遍历目录: {DOCS_DIR}")
+
+    for filename in os.listdir(DOCS_DIR):
+        full_path = os.path.join(DOCS_DIR, filename)
+
+        # 排除文件夹，只处理文件
+        if os.path.isfile(full_path):
+            # 直接调用，内部 _get_loader 会处理它不认识的文件格式
+            kb.add_document(full_path)
+
+    # 4. 统计与查询
+    kb.get_overview()
+
+    print("\n🔍 正在进行检索测试...")
+    test_query = "L2缓存命中率低"  # 根据你的实际文档内容调整
+    results = kb.search(test_query)
+
+    for res in results:
+        print(
+            f"📄 来源: {res['doc_id']} | 评分: {res['score']} | 内容: {res['content'][:50]}..."
+        )
+
+    print("\n✅ 批量测试流程结束。")
