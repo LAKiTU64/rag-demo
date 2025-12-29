@@ -1,6 +1,0 @@
-
-LangGraph 是 LangChain 生态系统的核心编排引擎。
-相比 AgentExecutor，LangGraph 提供了循环图结构和更强的状态控制。
-LangGraph 支持复杂的多步骤工作流、条件分支和状态持久化。
-它允许开发者构建更灵活的 Agent 系统，适用于生产环境。
-LangGraph 的核心优势在于其显式的图结构定义和细粒度的控制能力。

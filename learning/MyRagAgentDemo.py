@@ -10,7 +10,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_huggingface import HuggingFacePipeline
 from langgraph.graph import StateGraph, END
 
-from VectorKBManager import VectorKBManager
+from learning.VectorKBManager import VectorKBManager
 
 
 # --- Config ---
