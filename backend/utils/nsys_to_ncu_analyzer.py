@@ -398,7 +398,8 @@ class NSysToNCUAnalyzer:
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=self.env)
             if res.returncode != 0:
-                print(f"⚠️ 全量采集失败(returncode={res.returncode}): {(res.stderr or '')[:300].replace('\n',' ')}")
+                error_msg = (res.stderr or '')[:300].replace('\n',' ')
+                print(f"⚠️ 全量采集失败(returncode={res.returncode}): {error_msg}")
                 return None
             if not Path(ncu_rep).exists():
                 print(f"⚠️ 未生成 ncu 报告文件: {ncu_rep}")
