@@ -5,13 +5,13 @@
 # ============================================================
 
 # SGlang代码路径（必须配置）
-sglang_path: "/sgl-workspace/sglang/python/sglang"
+sglang_path: "/sglang"
 # 示例：
 # - Windows: "D:/Code/sglang" 或 "C:/Users/xxx/sglang"
 # - Linux: "/home/user/sglang"
 
 # 模型文件路径（必须配置）
-models_path: "/workspace/"
+models_path: "/.models/Qwen/Qwen3-4B"
 # 示例：
 # - Windows: "D:/Models" 或 "C:/Users/xxx/models"
 # - Linux: "/data/models"
@@ -45,6 +45,7 @@ model_mappings:
   "qwen-7b": "Qwen-7B-Chat"
   "qwen-14b": "Qwen-14B-Chat"
   "chatglm-6b": "chatglm-6b"
+  "qwen3-4b": "Qwen/Qwen3-4B"
   
   # 如果使用绝对路径：
   # "llama-7b": "D:/Models/Llama-2-7b-hf"
