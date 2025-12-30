@@ -5,16 +5,19 @@
 # ============================================================
 
 # SGlang代码路径（必须配置）
-sglang_path: "/sglang"
+sglang_path: "./.sglang"
 # 示例：
 # - Windows: "D:/Code/sglang" 或 "C:/Users/xxx/sglang"
 # - Linux: "/home/user/sglang"
 
-# 模型文件路径（必须配置）
-models_path: "/.models/Qwen/Qwen3-4B"
+# 用于分析的模型文件路径（必须配置）
+models_path: "./.models"
 # 示例：
 # - Windows: "D:/Models" 或 "C:/Users/xxx/models"
 # - Linux: "/data/models"
+
+# 用于推理的本地千问模型路径（必须配置）
+offline_qwen_path: "./models/Qwen/Qwen-4B"
 
 # ============================================================
 # 服务器配置

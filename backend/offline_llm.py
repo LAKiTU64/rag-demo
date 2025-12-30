@@ -19,25 +19,26 @@ def _truncate_kernel_column(markdown: str, max_len: int = 30) -> str:
     truncated = []
     for line in lines:
         stripped = line.strip()
-        if '|' not in stripped:
+        if "|" not in stripped:
             truncated.append(line)
             continue
 
-        core = stripped.strip('|')
-        cells = [cell.strip() for cell in core.split('|')]
+        core = stripped.strip("|")
+        cells = [cell.strip() for cell in core.split("|")]
         if not cells:
             truncated.append(line)
             continue
 
-        header_or_separator = cells[0].lower() == 'kernel' or all(set(cell) <= {'-', ':', ' '} for cell in cells)
+        header_or_separator = cells[0].lower() == "kernel" or all(
+            set(cell) <= {"-", ":", " "} for cell in cells
+        )
         if header_or_separator:
             truncated.append(line)
             continue
 
-        # cells[0] = cells[0][:max_len]
-        rebuilt = '| ' + ' | '.join(cells) + ' |'
+        rebuilt = "| " + " | ".join(cells) + " |"
         truncated.append(rebuilt)
-    return '\n'.join(truncated)
+    return "\n".join(truncated)
 
 
 def _extract_table_only(markdown: str) -> str:
@@ -50,17 +51,19 @@ def _extract_table_only(markdown: str) -> str:
             if table_started:
                 break
             continue
-        if '|' not in stripped:
+        if "|" not in stripped:
             if table_started:
                 break
             continue
         if not table_started:
-            header_cells = [cell.strip().lower() for cell in stripped.strip('|').split('|')]
-            if not header_cells or 'kernel' not in header_cells[0]:
+            header_cells = [
+                cell.strip().lower() for cell in stripped.strip("|").split("|")
+            ]
+            if not header_cells or "kernel" not in header_cells[0]:
                 continue
             table_started = True
-        collected.append(stripped if stripped.startswith('|') else f"| {stripped} |")
-    return '\n'.join(collected).strip()
+        collected.append(stripped if stripped.startswith("|") else f"| {stripped} |")
+    return "\n".join(collected).strip()
 
 
 def _parse_kernel_entries(report_text: str) -> List[Dict[str, str]]:
@@ -98,6 +101,7 @@ def _build_table_from_entries(entries: List[Dict[str, str]]) -> str:
         rows.append(f"| {item['name']} | {item['duration']} | {item['ratio']} |")
     return "\n".join(rows)
 
+
 class OfflineQwenClient:
     def __init__(self, model_dir: Path):
         if not model_dir.exists():
@@ -127,17 +131,37 @@ class OfflineQwenClient:
         )
         generated = outputs[0]["generated_text"]
         if generated.startswith(prompt):
-            generated = generated[len(prompt):]
+            generated = generated[len(prompt) :]
         cleaned = _extract_table_only(generated.strip())
-        if not cleaned or cleaned.count('|') < 6:
+        if not cleaned or cleaned.count("|") < 6:
             parsed_entries = _parse_kernel_entries(report_text)
             cleaned = _build_table_from_entries(parsed_entries)
         if not cleaned:
             cleaned = generated.strip()
         return _truncate_kernel_column(cleaned)
 
+    # ✅ 新增方法：用于 Agentic-RAG 的决策推理
+    def generate(self, prompt: str, max_tokens: int = 512) -> str:
+        """
+        使用本地 Qwen 模型生成文本（用于 RAG 决策）
+        """
+        outputs = self.pipeline(
+            prompt,
+            max_new_tokens=max_tokens,
+            temperature=0.1,  # 降低随机性，提高稳定性
+            do_sample=False,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
+        generated = outputs[0]["generated_text"]
+        # 去掉输入 prompt（如果模型返回了完整上下文）
+        if generated.startswith(prompt):
+            generated = generated[len(prompt) :].lstrip()
+        return generated.strip()
+
+
 _client_lock = threading.Lock()
 _cached_client: Optional[OfflineQwenClient] = None
+
 
 def get_offline_qwen_client(model_dir: Path) -> OfflineQwenClient:
     global _cached_client
