@@ -17,7 +17,7 @@ models_path: "./.models"
 # - Linux: "/data/models"
 
 # 用于推理的本地千问模型路径（必须配置）
-offline_qwen_path: "./models/Qwen/Qwen-4B"
+offline_qwen_path: "./.models/Qwen/Qwen-4B"
 
 # ============================================================
 # 服务器配置
