@@ -24,8 +24,8 @@ EMBEDDING_MODEL = os.path.join(
     "bge-small-zh-v1.5",
 )
 CHROMA_PATH = "/.chroma_db"
-CHUNK_SIZE = 200
-CHUNK_OVERLAP = 50
+CHUNK_SIZE = 300
+CHUNK_OVERLAP = 100
 DEFAULT_SEARCH_K = 3
 SIMILARITY_THRESHOLD = 0.5
 BEIJING_TZ = timezone(timedelta(hours=8))
