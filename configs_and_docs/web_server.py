@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 from pydantic import BaseModel
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Body, Request
+from fastapi import (
+    FastAPI,
+    WebSocket,
+    WebSocketDisconnect,
+    UploadFile,
+    File,
+    Body,
+    Request,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,7 +31,7 @@ import yaml
 
 # 添加路径
 sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+sys.path.insert(0, str(Path(__file__).parent / "utils"))
 
 # 导入AI Agent核心 & 知识库摄取
 try:
@@ -36,14 +44,18 @@ except Exception as e:
     print(f"⚠️ 无法导入知识库摄取模块: {e}")
     ingest_json_to_faiss = None  # type: ignore
     ingest_model_config = None  # type: ignore
+
+
 class FinalReportRequest(BaseModel):
     job_id: str
     extra_query: Optional[str] = None
+
 
 class SGLangAnalyzeRequest(BaseModel):
     """请求: 一次性触发 sglang nsys+ncu 快速分析。
 
     仅用于同步接口 /analyze/sglang (不生成高级/增强报告)。"""
+
     model_path: str
     batch_size: int = 1
     input_len: int = 256
@@ -51,11 +63,13 @@ class SGLangAnalyzeRequest(BaseModel):
     top_k: int = 20
     min_duration_ms: float = 1.0
     max_ncu_kernels: int = 10
+
 
 class AnalysisSubmitRequest(BaseModel):
     """提交异步分析作业的请求体。
 
     支持附加生成高级 / 增强报告，以及远程代码信任等参数。"""
+
     model_path: str
     batch_size: int = 1
     input_len: int = 256
@@ -71,11 +85,13 @@ class AnalysisSubmitRequest(BaseModel):
     ingest_advanced: bool = False
     kb_path: Optional[str] = None
     note: Optional[str] = None
+
 
 class FullAnalysisRequest(BaseModel):
     """端到端综合分析请求体。
 
     用于 /analysis/full 接口: nsys + ncu + 基础报告 + (可选) 高阶/增强报告 + (可选) KB 摄取。"""
+
     model_path: str
     batch_size: int = 1
     input_len: int = 256
@@ -92,15 +108,16 @@ class FullAnalysisRequest(BaseModel):
     kb_path: Optional[str] = None
     note: Optional[str] = None
 
+
 # 加载配置
 config_path = Path(__file__).parent.parent / "config.yaml"
-with open(config_path, 'r', encoding='utf-8') as f:
+with open(config_path, "r", encoding="utf-8") as f:
     CONFIG = yaml.safe_load(f)
 
 app = FastAPI(
     title="AI Agent LLM性能分析器",
     description="智能的大语言模型性能分析Web服务",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # 配置CORS
@@ -121,28 +138,34 @@ agent = None
 active_connections: Dict[str, WebSocket] = {}
 last_analysis_dir: Optional[str] = None
 
+
 class AnalysisJob:
     def __init__(self, job_id: str, params: Dict[str, Any]):
         self.job_id = job_id
         self.params = params
-        self.status = 'pending'
+        self.status = "pending"
         self.error: Optional[str] = None
         self.output_dir: Optional[str] = None
         self.artifacts: Dict[str, Any] = {}
         self.started_at = datetime.now().isoformat()
         self.finished_at: Optional[str] = None
 
+
 class JobManager:
     def __init__(self):
         self.jobs: Dict[str, AnalysisJob] = {}
+
     def create(self, params: Dict[str, Any]) -> AnalysisJob:
         import uuid
+
         jid = uuid.uuid4().hex[:12]
         job = AnalysisJob(jid, params)
         self.jobs[jid] = job
         return job
+
     def get(self, job_id: str) -> Optional[AnalysisJob]:
         return self.jobs.get(job_id)
+
 
 job_manager = JobManager()
 
@@ -151,25 +174,26 @@ API_LABELS = {
     "langchain": "LangChain Agent",
     "nsys": "NSys 性能分析",
     "ncu": "NCU 深度分析",
-    "custom": "自定义工具链"
+    "custom": "自定义工具链",
 }
+
 
 class ConnectionManager:
     """WebSocket连接管理器"""
-    
+
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
-    
+
     async def connect(self, websocket: WebSocket, session_id: str):
         await websocket.accept()
         self.active_connections[session_id] = websocket
         print(f"🔗 连接建立: {session_id}")
-    
+
     def disconnect(self, session_id: str):
         if session_id in self.active_connections:
             del self.active_connections[session_id]
             print(f"❌ 连接断开: {session_id}")
-    
+
     async def send_message(self, session_id: str, message: dict):
         if session_id in self.active_connections:
             try:
@@ -178,7 +202,9 @@ class ConnectionManager:
                 print(f"发送消息失败: {e}")
                 self.disconnect(session_id)
 
+
 manager = ConnectionManager()
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -190,9 +216,10 @@ async def startup_event():
             print("✅ AI Agent初始化成功")
         except Exception as e:
             print(f"⚠️ AI Agent初始化失败: {e}")
-    
+
     print("🤖 AI Agent Web服务器启动完成")
     print(f"📡 服务地址: http://{CONFIG['server']['host']}:{CONFIG['server']['port']}")
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -212,27 +239,28 @@ async def root():
     </html>
     """
 
+
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page():
     """聊天页面"""
     chat_file = Path(__file__).parent.parent / "frontend" / "chat.html"
     if chat_file.exists():
-        return chat_file.read_text(encoding='utf-8')
+        return chat_file.read_text(encoding="utf-8")
     else:
-        return HTMLResponse(
-            content="<h1>聊天页面未找到</h1>",
-            status_code=404
-        )
+        return HTMLResponse(content="<h1>聊天页面未找到</h1>", status_code=404)
+
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket连接端点"""
     await manager.connect(websocket, session_id)
-    
+
     # 发送欢迎消息
-    await manager.send_message(session_id, {
-        "type": "assistant_message",
-        "content": """🤖 **欢迎使用AI Agent LLM性能分析器！**
+    await manager.send_message(
+        session_id,
+        {
+            "type": "assistant_message",
+            "content": """🤖 **欢迎使用AI Agent LLM性能分析器！**
 
 我可以帮您：
 • 🔍 分析各种LLM模型的性能
@@ -243,37 +271,39 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 请告诉我您的分析需求！例如：
 "分析 llama-7b 模型，batch_size=8"
 """,
-        "timestamp": datetime.now().isoformat()
-    })
-    
+            "timestamp": datetime.now().isoformat(),
+        },
+    )
+
     try:
         while True:
             data = await websocket.receive_text()
             message_data = json.loads(data)
-            
+
             await handle_websocket_message(session_id, message_data)
-            
+
     except WebSocketDisconnect:
         manager.disconnect(session_id)
     except Exception as e:
         print(f"WebSocket错误: {e}")
         manager.disconnect(session_id)
 
+
 async def handle_websocket_message(session_id: str, message_data: dict):
     """处理WebSocket消息"""
-    
+
     message_type = message_data.get("type", "")
     content = message_data.get("content", "")
     api_choice = message_data.get("api", "auto")
-    
+
     if message_type == "user_message":
         await process_user_message(session_id, content, api_choice)
-    
+
     elif message_type == "ping":
-        await manager.send_message(session_id, {
-            "type": "pong",
-            "timestamp": datetime.now().isoformat()
-        })
+        await manager.send_message(
+            session_id, {"type": "pong", "timestamp": datetime.now().isoformat()}
+        )
+
 
 def resolve_api_selection(api: str) -> str:
     if api == "auto":
@@ -283,35 +313,44 @@ def resolve_api_selection(api: str) -> str:
 
 async def process_user_message(session_id: str, message: str, api: str = "auto"):
     """处理用户消息"""
-    
+
     try:
         resolved_api = resolve_api_selection(api)
         api_label = API_LABELS.get(resolved_api, resolved_api)
 
-        await manager.send_message(session_id, {
-            "type": "assistant_message",
-            "content": (
-                "🔄 正在处理您的请求\n\n"
-                f"• 选择的API: **{api_label}**\n"
-                f"• 请求内容: {message}"
-            ),
-            "timestamp": datetime.now().isoformat()
-        })
-        
+        await manager.send_message(
+            session_id,
+            {
+                "type": "assistant_message",
+                "content": (
+                    "🔄 正在处理您的请求\n\n"
+                    f"• 选择的API: **{api_label}**\n"
+                    f"• 请求内容: {message}"
+                ),
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
+
         response = await dispatch_api_request(resolved_api, message)
-        
-        await manager.send_message(session_id, {
-            "type": "assistant_message",
-            "content": response,
-            "timestamp": datetime.now().isoformat()
-        })
+
+        await manager.send_message(
+            session_id,
+            {
+                "type": "assistant_message",
+                "content": response,
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
 
     except Exception as e:
-        await manager.send_message(session_id, {
-            "type": "error",
-            "content": f"❌ 处理失败: {str(e)}",
-            "timestamp": datetime.now().isoformat()
-        })
+        await manager.send_message(
+            session_id,
+            {
+                "type": "error",
+                "content": f"❌ 处理失败: {str(e)}",
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
 
 
 async def dispatch_api_request(api: str, message: str) -> str:
@@ -395,41 +434,53 @@ def generate_placeholder_response(api: str, message: str) -> str:
 原始请求: {message}
 """
 
+
 @app.post("/upload_config")
 async def upload_config(file: UploadFile = File(...)):
     """上传配置文件"""
-    
+
     try:
         content = await file.read()
-        content_str = content.decode('utf-8')
-        
+        content_str = content.decode("utf-8")
+
         # 解析配置
-        if file.filename.endswith('.json'):
+        if file.filename.endswith(".json"):
             config_data = json.loads(content_str)
-        elif file.filename.endswith(('.yaml', '.yml')):
+        elif file.filename.endswith((".yaml", ".yml")):
             config_data = yaml.safe_load(content_str)
         else:
             return {"error": "不支持的文件格式"}
-        
+
         return {
             "filename": file.filename,
             "message": "配置文件上传成功",
-            "config": config_data
+            "config": config_data,
         }
-        
+
     except Exception as e:
         return {"error": f"上传失败: {str(e)}"}
+
 
 @app.post("/knowledge/upload")
 async def upload_knowledge_json(
     request: Request,
     file: UploadFile = File(None),
-    raw_json: Optional[str] = Body(None, description="字符串形式的 JSON 或直接传递 JSON 对象"),
-    embedding_model: Optional[str] = Body(None, description="可选的嵌入模型名；支持 ms:<model-id> 通过 ModelScope 下载 (例如 ms:damo/nlp_gte-base-zh)"),
-    force_tfidf: Optional[bool] = Body(False, description="强制使用 TF-IDF fallback 而不加载任何嵌入模型"),
-    segmentation_mode: Optional[str] = Body("window", description="文本切分模式: window(滑窗)/sentence(按句)/auto(本地嵌入自动句子)"),
+    raw_json: Optional[str] = Body(
+        None, description="字符串形式的 JSON 或直接传递 JSON 对象"
+    ),
+    embedding_model: Optional[str] = Body(
+        None,
+        description="可选的嵌入模型名；支持 ms:<model-id> 通过 ModelScope 下载 (例如 ms:damo/nlp_gte-base-zh)",
+    ),
+    force_tfidf: Optional[bool] = Body(
+        False, description="强制使用 TF-IDF fallback 而不加载任何嵌入模型"
+    ),
+    segmentation_mode: Optional[str] = Body(
+        "window",
+        description="文本切分模式: window(滑窗)/sentence(按句)/auto(本地嵌入自动句子)",
+    ),
     request_body: Optional[dict] = Body(None),
-    debug: Optional[bool] = Body(False)
+    debug: Optional[bool] = Body(False),
 ):
     """上传并摄取 JSON 知识库到 FAISS
 
@@ -457,9 +508,11 @@ async def upload_knowledge_json(
         if file is not None:
             content_bytes = await file.read()
             try:
-                json_str = content_bytes.decode('utf-8')
+                json_str = content_bytes.decode("utf-8")
             except Exception:
-                return JSONResponse(status_code=400, content={"error": "文件编码解析失败，需 UTF-8"})
+                return JSONResponse(
+                    status_code=400, content={"error": "文件编码解析失败，需 UTF-8"}
+                )
         else:
             # raw_json 参数处理
             if raw_json is not None:
@@ -468,7 +521,10 @@ async def upload_knowledge_json(
                     try:
                         json_str = json.dumps(raw_json, ensure_ascii=False)
                     except Exception as e:
-                        return JSONResponse(status_code=400, content={"error": f"raw_json 序列化失败: {e}"})
+                        return JSONResponse(
+                            status_code=400,
+                            content={"error": f"raw_json 序列化失败: {e}"},
+                        )
                 else:
                     # 字符串形式
                     json_str = raw_json
@@ -477,38 +533,62 @@ async def upload_knowledge_json(
                 try:
                     json_str = json.dumps(request_body, ensure_ascii=False)
                 except Exception as e:
-                    return JSONResponse(status_code=400, content={"error": f"请求主体序列化失败: {e}"})
+                    return JSONResponse(
+                        status_code=400, content={"error": f"请求主体序列化失败: {e}"}
+                    )
             else:
                 # 最后尝试直接读取原始 body (解决未声明字段时直接传对象的情况)
-                if request.headers.get("content-type", "").startswith("application/json"):
+                if request.headers.get("content-type", "").startswith(
+                    "application/json"
+                ):
                     try:
                         raw_bytes = await request.body()
                         if raw_bytes:
-                            parsed = json.loads(raw_bytes.decode('utf-8'))
+                            parsed = json.loads(raw_bytes.decode("utf-8"))
                             json_str = json.dumps(parsed, ensure_ascii=False)
-                            diagnostics['fallback_body_parse'] = True
+                            diagnostics["fallback_body_parse"] = True
                     except Exception as e:
-                        return JSONResponse(status_code=400, content={"error": f"直接主体解析失败: {e}"})
+                        return JSONResponse(
+                            status_code=400, content={"error": f"直接主体解析失败: {e}"}
+                        )
 
         if not json_str:
-            return JSONResponse(status_code=400, content={"error": "缺少 JSON 内容: 请提供 file、raw_json 或直接 JSON 对象", "received_headers": dict(request.headers), "debug": True if debug else None})
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "缺少 JSON 内容: 请提供 file、raw_json 或直接 JSON 对象",
+                    "received_headers": dict(request.headers),
+                    "debug": True if debug else None,
+                },
+            )
 
         model_name = embedding_model or "sentence-transformers/all-MiniLM-L6-v2"
         # 环境变量触发强制 TF-IDF (优先级低于明确传参 force_tfidf)
-        env_force = os.getenv('OFFLINE_FORCE_TFIDF', '0').lower() in ('1', 'true', 'yes')
+        env_force = os.getenv("OFFLINE_FORCE_TFIDF", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         effective_force_tfidf = bool(force_tfidf) or env_force
         # 尝试摄取索引并捕获构建阶段具体错误
         try:
-            seg_mode_eff = segmentation_mode or 'window'
-            if seg_mode_eff == 'auto':
-                if model_name.startswith('local:') or model_name == 'local-simple':
-                    seg_mode_eff = 'sentence'
+            seg_mode_eff = segmentation_mode or "window"
+            if seg_mode_eff == "auto":
+                if model_name.startswith("local:") or model_name == "local-simple":
+                    seg_mode_eff = "sentence"
                 else:
-                    seg_mode_eff = 'window'
+                    seg_mode_eff = "window"
             # 本地哈希嵌入默认改为句子模式（若用户未明确指定）
-            if segmentation_mode == 'window' and (model_name.startswith('local:') or model_name == 'local-simple'):
-                seg_mode_eff = 'sentence'
-            result = ingest_json_to_faiss(json_str, embedding_model=model_name, force_tfidf=effective_force_tfidf, segmentation_mode=seg_mode_eff)
+            if segmentation_mode == "window" and (
+                model_name.startswith("local:") or model_name == "local-simple"
+            ):
+                seg_mode_eff = "sentence"
+            result = ingest_json_to_faiss(
+                json_str,
+                embedding_model=model_name,
+                force_tfidf=effective_force_tfidf,
+                segmentation_mode=seg_mode_eff,
+            )
         except Exception as ingest_exc:
             # 未在底层函数内被处理的异常
             err_payload = {
@@ -519,40 +599,47 @@ async def upload_knowledge_json(
                 "force_tfidf": effective_force_tfidf,
                 "embedding_provider": None,
             }
-            return JSONResponse(status_code=500 if not debug else 400, content=err_payload)
+            return JSONResponse(
+                status_code=500 if not debug else 400, content=err_payload
+            )
 
         # 若底层返回错误状态, 以 400 显示
         if result.get("status") == "error":
             if debug:
-                result['diagnostics'] = diagnostics
-                result['embedding_model'] = model_name
-                result['force_tfidf'] = effective_force_tfidf
-                result['force_tfidf_used'] = effective_force_tfidf
-                result['embedding_provider'] = result.get('embedding_provider')
-                result['segmentation_mode_used'] = seg_mode_eff
-                result['json_length'] = len(json_str)
+                result["diagnostics"] = diagnostics
+                result["embedding_model"] = model_name
+                result["force_tfidf"] = effective_force_tfidf
+                result["force_tfidf_used"] = effective_force_tfidf
+                result["embedding_provider"] = result.get("embedding_provider")
+                result["segmentation_mode_used"] = seg_mode_eff
+                result["json_length"] = len(json_str)
                 try:
                     parsed_tmp = json.loads(json_str)
                     if isinstance(parsed_tmp, dict):
-                        result['root_keys'] = list(parsed_tmp.keys())
+                        result["root_keys"] = list(parsed_tmp.keys())
                 except Exception:
                     pass
             return JSONResponse(status_code=400, content=result)
         if debug:
-            result['diagnostics'] = diagnostics
-            result['content_type'] = request.headers.get('content-type')
-            result['embedding_model'] = model_name
-            result['force_tfidf'] = effective_force_tfidf
-            result['force_tfidf_used'] = effective_force_tfidf or (result.get('embedding_provider') == 'tfidf_fallback')
-            result['embedding_provider'] = result.get('embedding_provider')
-            result['segmentation_mode_used'] = seg_mode_eff
+            result["diagnostics"] = diagnostics
+            result["content_type"] = request.headers.get("content-type")
+            result["embedding_model"] = model_name
+            result["force_tfidf"] = effective_force_tfidf
+            result["force_tfidf_used"] = effective_force_tfidf or (
+                result.get("embedding_provider") == "tfidf_fallback"
+            )
+            result["embedding_provider"] = result.get("embedding_provider")
+            result["segmentation_mode_used"] = seg_mode_eff
         # 正常返回也补充 force_tfidf_used 字段
-        result['force_tfidf_used'] = effective_force_tfidf or (result.get('embedding_provider') == 'tfidf_fallback')
-        result['segmentation_mode_used'] = seg_mode_eff
+        result["force_tfidf_used"] = effective_force_tfidf or (
+            result.get("embedding_provider") == "tfidf_fallback"
+        )
+        result["segmentation_mode_used"] = seg_mode_eff
         return JSONResponse(status_code=200, content=result)
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"摄取失败: {e}"})
+
 
 @app.get("/report/full")
 async def generate_full_report():
@@ -560,15 +647,19 @@ async def generate_full_report():
     try:
         from backend.report_generator import generate_enriched_report
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"报告生成模块不可用: {e}"})
+        return JSONResponse(
+            status_code=500, content={"error": f"报告生成模块不可用: {e}"}
+        )
     # 选择目标目录
     target_dir = last_analysis_dir or "/workspace/Agent/AI_Agent_Complete"
     from pathlib import Path
+
     try:
         enriched = generate_enriched_report(Path(target_dir))
         return {"status": "ok", "enriched_report": enriched, "output_dir": target_dir}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"生成失败: {e}"})
+
 
 @app.get("/report/advanced")
 async def generate_advanced(detailed: bool = False, ncu_metrics: bool = False):
@@ -582,35 +673,48 @@ async def generate_advanced(detailed: bool = False, ncu_metrics: bool = False):
         from backend.advanced_report import generate_advanced_report
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"模块不可用: {e}"})
-    target_dir = last_analysis_dir or "/workspace/Agent/AI_Agent_Complete/sglang_analysis_b8_i512_o64"
+    target_dir = (
+        last_analysis_dir
+        or "/workspace/Agent/AI_Agent_Complete/sglang_analysis_b8_i512_o64"
+    )
     from pathlib import Path
+
     try:
         path = generate_advanced_report(Path(target_dir), detailed=detailed)
         extra = {}
         if ncu_metrics:
             from pathlib import Path as _P
             import glob, csv
+
             metrics_list = []
-            for csv_file in glob.glob(str(_P(target_dir) / 'ncu_kernel_*/*.csv')):
+            for csv_file in glob.glob(str(_P(target_dir) / "ncu_kernel_*/*.csv")):
                 # Some visualization dirs; skip for now
                 continue
             # flat pattern (top-level)
-            for csv_file in glob.glob(str(_P(target_dir) / 'ncu_kernel_*.csv')):
+            for csv_file in glob.glob(str(_P(target_dir) / "ncu_kernel_*.csv")):
                 p = _P(csv_file)
                 if p.stat().st_size == 0:
                     continue
                 try:
-                    with open(p, 'r', encoding='utf-8') as f:
+                    with open(p, "r", encoding="utf-8") as f:
                         reader = csv.reader(f)
                         header = next(reader, [])
                         rows = list(reader)[:5]
-                    metrics_list.append({"file": p.name, "header": header, "sample_rows": rows})
+                    metrics_list.append(
+                        {"file": p.name, "header": header, "sample_rows": rows}
+                    )
                 except Exception:
                     pass
-            extra['ncu_csv_samples'] = metrics_list
-        return {"status": "ok", "advanced_report": path, "output_dir": target_dir, **extra}
+            extra["ncu_csv_samples"] = metrics_list
+        return {
+            "status": "ok",
+            "advanced_report": path,
+            "output_dir": target_dir,
+            **extra,
+        }
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"生成失败: {e}"})
+
 
 @app.get("/health")
 async def health_check():
@@ -620,18 +724,20 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "active_connections": len(manager.active_connections),
         "agent_ready": agent is not None,
-        "config_loaded": CONFIG is not None
+        "config_loaded": CONFIG is not None,
     }
+
 
 @app.get("/config")
 async def get_config():
     """获取配置信息"""
     return {
-        "sglang_path": CONFIG.get('sglang_path'),
-        "models_path": CONFIG.get('models_path'),
-        "server": CONFIG.get('server'),
-        "model_mappings": CONFIG.get('model_mappings', {})
+        "sglang_path": CONFIG.get("sglang_path"),
+        "models_path": CONFIG.get("models_path"),
+        "server": CONFIG.get("server"),
+        "model_mappings": CONFIG.get("model_mappings", {}),
     }
+
 
 @app.post("/analyze/sglang")
 async def analyze_sglang(req: SGLangAnalyzeRequest):
@@ -641,12 +747,19 @@ async def analyze_sglang(req: SGLangAnalyzeRequest):
     try:
         # 构建 sglang 命令
         sglang_cmd = [
-            'python', '-m', 'sglang.bench_one_batch',
-            '--model-path', req.model_path,
-            '--batch-size', str(req.batch_size),
-            '--input-len', str(req.input_len),
-            '--output-len', str(req.output_len),
-            '--load-format', 'dummy'
+            "python",
+            "-m",
+            "sglang.bench_one_batch",
+            "--model-path",
+            req.model_path,
+            "--batch-size",
+            str(req.batch_size),
+            "--input-len",
+            str(req.input_len),
+            "--output-len",
+            str(req.output_len),
+            "--load-format",
+            "dummy",
         ]
         analyzer = NSysToNCUAnalyzer(
             f"sglang_analysis_b{req.batch_size}_i{req.input_len}_o{req.output_len}"
@@ -656,10 +769,15 @@ async def analyze_sglang(req: SGLangAnalyzeRequest):
             nsys_file, top_k=req.top_k, min_duration_ms=req.min_duration_ms
         )
         full_rep, focus_metrics = analyzer.step3_ncu_global_focus(
-            sglang_cmd, hot, top_focus=min(req.max_ncu_kernels, len(hot)), set_name='compute'
+            sglang_cmd,
+            hot,
+            top_focus=min(req.max_ncu_kernels, len(hot)),
+            set_name="compute",
         )
         ncu_files = [full_rep] if full_rep else []
-        results = analyzer.step4_comprehensive_analysis(ncu_files, focus_metrics=focus_metrics)
+        results = analyzer.step4_comprehensive_analysis(
+            ncu_files, focus_metrics=focus_metrics
+        )
         report = analyzer.generate_final_report(results)
         global last_analysis_dir
         last_analysis_dir = str(analyzer.output_dir)
@@ -670,106 +788,138 @@ async def analyze_sglang(req: SGLangAnalyzeRequest):
             "hot_kernels": hot[:10],
             "ncu_files": ncu_files,
             "focus_metrics_count": len(focus_metrics),
-            "json_kernel_candidates": results.get('nsys_overview', {}).get('kernel_analysis', {}).get('unique_kernels', None)
+            "json_kernel_candidates": results.get("nsys_overview", {})
+            .get("kernel_analysis", {})
+            .get("unique_kernels", None),
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@app.post('/analysis/submit')
+
+@app.post("/analysis/submit")
 async def submit_analysis(req: AnalysisSubmitRequest):
     """提交异步性能分析作业。"""
     if NSysToNCUAnalyzer is None:
-        return JSONResponse(status_code=500, content={'error': '分析模块未加载'})
+        return JSONResponse(status_code=500, content={"error": "分析模块未加载"})
     job = job_manager.create(req.dict())
     import threading
 
     def _worker():
-        job.status = 'running'
+        job.status = "running"
         try:
             analyzer = NSysToNCUAnalyzer(
                 f"sglang_analysis_b{req.batch_size}_i{req.input_len}_o{req.output_len}_job_{job.job_id}"
             )
             cmd = [
-                'python', '-m', 'sglang.bench_one_batch',
-                '--model-path', req.model_path,
-                '--batch-size', str(req.batch_size),
-                '--input-len', str(req.input_len),
-                '--output-len', str(req.output_len),
-                '--load-format', 'dummy'
+                "python",
+                "-m",
+                "sglang.bench_one_batch",
+                "--model-path",
+                req.model_path,
+                "--batch-size",
+                str(req.batch_size),
+                "--input-len",
+                str(req.input_len),
+                "--output-len",
+                str(req.output_len),
+                "--load-format",
+                "dummy",
             ]
             if req.allow_remote_code:
-                cmd.append('--trust-remote-code')
-            nsys_rep = analyzer.step1_nsys_analysis(cmd, 'overview')
-            hot = analyzer.step2_extract_hot_kernels(nsys_rep, top_k=req.top_k, min_duration_ms=req.min_duration_ms)
-            full_rep, focus_metrics = analyzer.step3_ncu_global_focus(cmd, hot, top_focus=min(req.max_ncu_kernels, len(hot)), set_name='compute')
+                cmd.append("--trust-remote-code")
+            nsys_rep = analyzer.step1_nsys_analysis(cmd, "overview")
+            hot = analyzer.step2_extract_hot_kernels(
+                nsys_rep, top_k=req.top_k, min_duration_ms=req.min_duration_ms
+            )
+            full_rep, focus_metrics = analyzer.step3_ncu_global_focus(
+                cmd,
+                hot,
+                top_focus=min(req.max_ncu_kernels, len(hot)),
+                set_name="compute",
+            )
             ncu_files = [full_rep] if full_rep else []
-            comp = analyzer.step4_comprehensive_analysis(ncu_files, focus_metrics=focus_metrics)
+            comp = analyzer.step4_comprehensive_analysis(
+                ncu_files, focus_metrics=focus_metrics
+            )
             base_report = analyzer.generate_final_report(comp)
             # 高阶报告
             if req.advanced:
                 try:
                     from backend.advanced_report import generate_advanced_report
-                    generate_advanced_report(analyzer.output_dir, detailed=req.advanced_detailed)
+
+                    generate_advanced_report(
+                        analyzer.output_dir, detailed=req.advanced_detailed
+                    )
                 except Exception as _e:
                     print(f"高级报告失败: {_e}")
             # 增强报告
             if req.generate_enriched:
                 try:
                     from backend.report_generator import generate_enriched_report
+
                     generate_enriched_report(analyzer.output_dir, comprehensive=comp)
                 except Exception as _e:
                     print(f"增强报告失败: {_e}")
             job.output_dir = str(analyzer.output_dir)
             job.artifacts = {
-                'hot_kernels': hot,
-                'ncu_files': ncu_files,
-                'focus_metrics_count': len(focus_metrics),
-                'base_report': base_report
+                "hot_kernels": hot,
+                "ncu_files": ncu_files,
+                "focus_metrics_count": len(focus_metrics),
+                "base_report": base_report,
             }
-            job.status = 'done'
+            job.status = "done"
         except Exception as e:
-            job.status = 'error'
+            job.status = "error"
             job.error = str(e)
         finally:
             job.finished_at = datetime.now().isoformat()
-    threading.Thread(target=_worker, daemon=True).start()
-    return {'job_id': job.job_id, 'status': job.status}
 
-@app.get('/analysis/status/{job_id}')
+    threading.Thread(target=_worker, daemon=True).start()
+    return {"job_id": job.job_id, "status": job.status}
+
+
+@app.get("/analysis/status/{job_id}")
 async def analysis_status(job_id: str):
     job = job_manager.get(job_id)
     if not job:
-        return JSONResponse(status_code=404, content={'error': 'job not found'})
+        return JSONResponse(status_code=404, content={"error": "job not found"})
     return {
-        'job_id': job.job_id,
-        'status': job.status,
-        'error': job.error,
-        'started_at': job.started_at,
-        'finished_at': job.finished_at,
-        'output_dir': job.output_dir
+        "job_id": job.job_id,
+        "status": job.status,
+        "error": job.error,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "output_dir": job.output_dir,
     }
 
-@app.post('/analysis/final_report')
+
+@app.post("/analysis/final_report")
 async def final_report(req: FinalReportRequest):
     job = job_manager.get(req.job_id)
     if not job:
-        return JSONResponse(status_code=404, content={'error': 'job not found'})
-    if job.status != 'done':
-        return JSONResponse(status_code=409, content={'error': f'job not finished: {job.status}'})
+        return JSONResponse(status_code=404, content={"error": "job not found"})
+    if job.status != "done":
+        return JSONResponse(
+            status_code=409, content={"error": f"job not finished: {job.status}"}
+        )
     from pathlib import Path as _P
+
     try:
         from backend.langchain_synthesis import synthesize_final_report
     except Exception as e:
-        return JSONResponse(status_code=500, content={'error': f'无法加载综合生成模块: {e}'})
+        return JSONResponse(
+            status_code=500, content={"error": f"无法加载综合生成模块: {e}"}
+        )
     perf_dir = _P(job.output_dir)
     result = synthesize_final_report(perf_dir, extra_query_text=req.extra_query)
     return {
-        'job_id': req.job_id,
-        'final_report': result['markdown_path'],
-        'summary': result['summary'],
-        'kb_queries': list(result['kb_hits'].keys()),
-        'model_info': result.get('model_info', {})
+        "job_id": req.job_id,
+        "final_report": result["markdown_path"],
+        "summary": result["summary"],
+        "kb_queries": list(result["kb_hits"].keys()),
+        "model_info": result.get("model_info", {}),
     }
+
 
 @app.post("/analysis/full")
 async def full_analysis(req: FullAnalysisRequest):
@@ -781,15 +931,22 @@ async def full_analysis(req: FullAnalysisRequest):
         return JSONResponse(status_code=500, content={"error": "分析模块未加载"})
     try:
         sglang_cmd = [
-            'python', '-m', 'sglang.bench_one_batch',
-            '--model-path', req.model_path,
-            '--batch-size', str(req.batch_size),
-            '--input-len', str(req.input_len),
-            '--output-len', str(req.output_len),
-            '--load-format', 'dummy'
+            "python",
+            "-m",
+            "sglang.bench_one_batch",
+            "--model-path",
+            req.model_path,
+            "--batch-size",
+            str(req.batch_size),
+            "--input-len",
+            str(req.input_len),
+            "--output-len",
+            str(req.output_len),
+            "--load-format",
+            "dummy",
         ]
         if req.allow_remote_code:
-            sglang_cmd.append('--trust-remote-code')
+            sglang_cmd.append("--trust-remote-code")
         analyzer = NSysToNCUAnalyzer(
             f"sglang_analysis_b{req.batch_size}_i{req.input_len}_o{req.output_len}"
         )
@@ -802,7 +959,7 @@ async def full_analysis(req: FullAnalysisRequest):
             sglang_cmd,
             hot,
             top_focus=min(req.max_ncu_kernels, len(hot)),
-            set_name='compute'
+            set_name="compute",
         )
         ncu_files = [full_rep] if full_rep else []
         results = analyzer.step4_comprehensive_analysis(
@@ -815,14 +972,23 @@ async def full_analysis(req: FullAnalysisRequest):
         if req.advanced:
             try:
                 from backend.advanced_report import generate_advanced_report
-                advanced_report_path = generate_advanced_report(analyzer.output_dir, detailed=req.advanced_detailed)
+
+                advanced_report_path = generate_advanced_report(
+                    analyzer.output_dir, detailed=req.advanced_detailed
+                )
                 if req.advanced_json:
                     # 复用 analyzer 中的辅助函数 (已在 utils 脚本里定义)，此处轻量 re-import
-                    from backend.utils.nsys_to_ncu_analyzer import _extract_advanced_json  # type: ignore
-                    md_text = Path(advanced_report_path).read_text(encoding='utf-8')
+                    from backend.utils.nsys_to_ncu_analyzer import (
+                        _extract_advanced_json,
+                    )  # type: ignore
+
+                    md_text = Path(advanced_report_path).read_text(encoding="utf-8")
                     advanced_json = _extract_advanced_json(md_text)
-                    json_path = analyzer.output_dir / 'advanced_performance_report.json'
-                    json_path.write_text(json.dumps(advanced_json, ensure_ascii=False, indent=2), encoding='utf-8')
+                    json_path = analyzer.output_dir / "advanced_performance_report.json"
+                    json_path.write_text(
+                        json.dumps(advanced_json, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
             except Exception as e:
                 print(f"⚠️ 高阶报告生成失败: {e}")
         # Enriched report (FAISS support)
@@ -830,7 +996,10 @@ async def full_analysis(req: FullAnalysisRequest):
         if req.generate_enriched:
             try:
                 from backend.report_generator import generate_enriched_report
-                enriched_path = generate_enriched_report(analyzer.output_dir, comprehensive=results)
+
+                enriched_path = generate_enriched_report(
+                    analyzer.output_dir, comprehensive=results
+                )
             except Exception as e:
                 print(f"⚠️ 增强报告生成失败: {e}")
         # Optional KB ingestion
@@ -838,47 +1007,49 @@ async def full_analysis(req: FullAnalysisRequest):
         if req.ingest_advanced and advanced_json:
             try:
                 from backend.knowledge_bases.kb_ingest import ingest_json_to_faiss
-                ingest_json_to_faiss(json.dumps(advanced_json, ensure_ascii=False), embedding_model="sentence-transformers/all-MiniLM-L6-v2", kb_path=req.kb_path or 'knowledge_store')
-                kb_ingest_status = 'ok'
+
+                ingest_json_to_faiss(
+                    json.dumps(advanced_json, ensure_ascii=False),
+                    embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+                    kb_path=req.kb_path or "knowledge_store",
+                )
+                kb_ingest_status = "ok"
             except Exception as e:
-                kb_ingest_status = f'failed: {e}'
+                kb_ingest_status = f"failed: {e}"
         # Metrics aggregation
         metrics = {}
         try:
             from backend.perf_data_parser import aggregate_metrics
-            metrics = aggregate_metrics({**results, 'hot_kernels': hot})
+
+            metrics = aggregate_metrics({**results, "hot_kernels": hot})
         except Exception as e:
             print(f"⚠️ 指标聚合失败: {e}")
         global last_analysis_dir
         last_analysis_dir = str(analyzer.output_dir)
         return {
-            'status': 'ok',
-            'output_dir': str(analyzer.output_dir),
-            'base_report': base_report,
-            'advanced_report': advanced_report_path,
-            'enriched_report': enriched_path,
-            'advanced_json_excerpt': advanced_json.get('summary') if isinstance(advanced_json, dict) else None,
-            'hot_kernels_top': hot[:10],
-            'ncu_files': ncu_files,
-            'focus_metrics_count': len(focus_metrics),
-            'metrics': metrics,
-            'kb_ingest_status': kb_ingest_status,
-            'note': req.note
+            "status": "ok",
+            "output_dir": str(analyzer.output_dir),
+            "base_report": base_report,
+            "advanced_report": advanced_report_path,
+            "enriched_report": enriched_path,
+            "advanced_json_excerpt": advanced_json.get("summary")
+            if isinstance(advanced_json, dict)
+            else None,
+            "hot_kernels_top": hot[:10],
+            "ncu_files": ncu_files,
+            "focus_metrics_count": len(focus_metrics),
+            "metrics": metrics,
+            "kb_ingest_status": kb_ingest_status,
+            "note": req.note,
         }
     except Exception as e:
-        return JSONResponse(status_code=500, content={'error': str(e)})
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 if __name__ == "__main__":
     # 获取配置
-    host = CONFIG.get('server', {}).get('host', '0.0.0.0')
-    port = CONFIG.get('server', {}).get('port', 8000)
-    
-    # 启动服务
-    uvicorn.run(
-        "web_server:app",
-        host=host,
-        port=port,
-        reload=False,
-        log_level="info"
-    )
+    host = CONFIG.get("server", {}).get("host", "0.0.0.0")
+    port = CONFIG.get("server", {}).get("port", 8000)
 
+    # 启动服务
+    uvicorn.run("web_server:app", host=host, port=port, reload=False, log_level="info")

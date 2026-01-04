@@ -9,9 +9,13 @@ import os
 import asyncio
 import json
 from pathlib import Path
+import sys
 from typing import Dict, List, Optional, Tuple
 
+
 # 导入分析工具
+sys.path.insert(0, str(Path(__file__).parent))
+
 from utils.nsys_to_ncu_analyzer import create_sglang_analysis_workflow
 from offline_llm import get_offline_qwen_client
 from knowledge_bases.vector_kb_manager import VectorKBManager

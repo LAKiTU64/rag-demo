@@ -113,7 +113,7 @@ class OfflineQwenClient:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_dir,
             device_map="auto",
-            torch_dtype=torch.float16 if torch.cuda.is_available() else None,
+            dtype=torch.float16 if torch.cuda.is_available() else None,
             trust_remote_code=True,
         )
         self.pipeline = TextGenerationPipeline(
