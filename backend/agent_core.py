@@ -20,8 +20,6 @@ from utils.nsys_to_ncu_analyzer import create_sglang_analysis_workflow
 from offline_llm import get_offline_qwen_client
 from knowledge_bases.vector_kb_manager import VectorKBManager
 
-OFFLINE_QWEN_PATH = Path(os.getenv("QWEN_LOCAL_MODEL_PATH", "./.models/Qwen/Qwen3-4B"))
-
 
 class AIAgent:
     """AI Agent核心类 - 自动化性能分析（支持 Agentic-RAG）"""
@@ -333,8 +331,8 @@ class AIAgent:
         return "\n".join(results)
 
     @staticmethod
-    def _generate_report_table(report_text: str) -> str:
-        client = get_offline_qwen_client(OFFLINE_QWEN_PATH)
+    def _generate_report_table(self, report_text: str) -> str:
+        client = get_offline_qwen_client(self.offline_qwen_path)
         return client.report_to_table(report_text)
 
     def _generate_multi_gpu_table(
