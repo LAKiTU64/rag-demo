@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Tuple
 
 import yaml
 
+# 设置多卡环境
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 
 # 导入分析工具
 sys.path.insert(0, str(Path(__file__).parent))
@@ -95,8 +97,8 @@ class AIAgent:
     ) -> Dict:
         """
         由 LLM 完全解析用户意图，返回严格结构化字典。
-        不做任何规则兜底，失败即抛异常。
         """
+
         prompt = f"""
 你是一个高性能计算（HPC）与大模型性能分析专家。请严格按以下规则解析用户请求。
 
@@ -127,7 +129,11 @@ class AIAgent:
 {{"model": "qwen3-4b", "analysis_type": "auto", "params": {{"batch_size": [1], "input_len": [128], "output_len": [1]}}}}
 """
 
-        raw_output = self.llm_client.generate(prompt, max_tokens=2048).strip()
+        raw_output = self.llm_client.generate(
+            prompt,
+            max_tokens=512,
+            mode="structured",  # 👈 关键：指定为结构化任务
+        ).strip()
 
         # 强制 JSON 解析
         if not (raw_output.startswith("{") and raw_output.endswith("}")):
@@ -588,6 +594,10 @@ class AIAgent:
 
 # ==================== 简单测试用例 ====================
 if __name__ == "__main__":
+    import yaml
+    from pathlib import Path
+    import asyncio
+
     # 导入config
     with open("config.yaml", "r", encoding="utf-8") as f:
         config_yaml = yaml.safe_load(f)
@@ -605,13 +615,33 @@ if __name__ == "__main__":
     else:
         print(f"文档目录不存在: {document_dir}")
 
-    # 测试问答
-    async def run_test():
-        print("🔍 测试问答功能")
+    # ==============================
+    # 🔧 新增：测试结构化意图解析（调试用）
+    # ==============================
+    async def test_structured_parsing():
+        print("\n🧪 测试结构化意图解析...")
+        user_query = "分析一下qwen3-4b模型，batch_size=1"
+        rag_context = ""  # 可留空或模拟
+        try:
+            intent = await agent._parse_user_intent_with_llm(user_query, rag_context)
+            print(f"✅ 解析成功: {intent}")
+        except Exception as e:
+            print(f"❌ 解析失败: {e}")
+
+    # ==============================
+    # 🔍 原有：端到端问答测试
+    # ==============================
+    async def run_end_to_end_test():
+        print("\n🔍 端到端问答测试...")
         try:
             response = await agent.process_message("分析一下qwen3-4b模型，batch_size=1")
-            print(f"✅ 响应:\n{response}")
+            print(f"✅ 最终响应:\n{response}")
         except Exception as e:
             print(f"❌ 异常: {e}")
 
-    asyncio.run(run_test())
+    # ==============================
+    # 🚀 运行测试
+    # ==============================
+    print("🚀 启动测试套件")
+    asyncio.run(test_structured_parsing())  # 先测解析
+    asyncio.run(run_end_to_end_test())  # 再测完整流程

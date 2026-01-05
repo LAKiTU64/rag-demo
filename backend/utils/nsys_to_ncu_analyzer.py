@@ -896,7 +896,7 @@ def create_sglang_analysis_workflow():
     DEFAULT_MODEL_DIR = (
         os.getenv("SGLANG_MODEL_PATH")
         or os.getenv("MODEL_PATH")
-        or "/workspace/models/"
+        or "/workspace/.models/"
     )
 
     def run_sglang_integrated_analysis(
@@ -925,11 +925,13 @@ def create_sglang_analysis_workflow():
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
             print(f"🔁 在 GPU {gpu_id} 上运行 nsys/ncu 流程 ...")
             sglang_cmd = [
-                "python",
+                sys.executable,
                 "-m",
                 "sglang.bench_one_batch",
                 "--model-path",
                 model_path,
+                "--mem-fraction-static",
+                "0.9",
                 "--batch-size",
                 str(batch_size),
                 "--input-len",
@@ -1001,7 +1003,7 @@ def main():
         "--sglang-model",
         type=str,
         default=os.getenv("SGLANG_MODEL_PATH") or os.getenv("MODEL_PATH"),
-        help="SGlang模型路径",
+        help="SGlang模型路径（可为本地模型目录或 HuggingFace repo id）。不传则尝试从 /workspaces/rag-demo/config.yaml 读取 offline_qwen_path",
     )
     parser.add_argument("--sglang-batch", type=int, default=1, help="SGlang批次大小")
     parser.add_argument(
@@ -1015,6 +1017,106 @@ def main():
     # 忽略 unknown_tail，统一走工作流
     if unknown_tail:
         print(f"[WARN] 忽略原始目标命令（unknown_tail）：{' '.join(unknown_tail)}")
+
+    # ====== 从 config.yaml 兜底解析模型路径（仅当 CLI 与 env 都未提供时） ======
+    from pathlib import Path
+    from typing import Any, Dict, Optional
+
+    def _load_yaml_config(cfg_path: Path) -> Dict[str, Any]:
+        try:
+            import yaml  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                "缺少依赖 PyYAML：请执行 `pip install pyyaml`，或通过 --sglang-model / 环境变量提供模型路径"
+            ) from e
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+
+    def _resolve_path(project_root: Path, p: Optional[str]) -> Optional[str]:
+        """将相对路径解析为绝对路径；HF repo id 原样返回。"""
+        if not p:
+            return None
+        p = str(p).strip()
+        if not p:
+            return None
+        # HF repo id 形如 "Qwen/Qwen3-4B"：不以 / 或 . 开头
+        if not p.startswith("/") and not p.startswith("."):
+            return p
+        # 相对路径：以项目根目录为基准
+        ap = (
+            (project_root / p).resolve() if not p.startswith("/") else Path(p).resolve()
+        )
+        return str(ap)
+
+    def _looks_like_hf_model_dir(model_dir: str) -> bool:
+        """本地模型目录必须包含 config.json（transformers/sglang 需要）。"""
+        try:
+            return Path(model_dir, "config.json").exists()
+        except Exception:
+            return False
+
+    project_root = Path("/workspaces/rag-demo")
+    cfg_file = project_root / "config.yaml"
+
+    # 注意：argparse default 已经读取了 env；此处仅当仍为空时介入
+    if not known_args.sglang_model:
+        # 1) 如果 env 给的是具体模型目录且含 config.json，直接用
+        env_mp = os.getenv("SGLANG_MODEL_PATH") or os.getenv("MODEL_PATH")
+        env_mp_resolved = _resolve_path(project_root, env_mp)
+        if (
+            env_mp_resolved
+            and env_mp_resolved.startswith("/")
+            and _looks_like_hf_model_dir(env_mp_resolved)
+        ):
+            known_args.sglang_model = env_mp_resolved
+            print(f"ℹ️ 使用环境变量提供的本地模型目录: {known_args.sglang_model}")
+        else:
+            # 2) 读 config.yaml：优先 offline_qwen_path
+            if cfg_file.exists():
+                cfg = _load_yaml_config(cfg_file)
+
+                offline_qwen = _resolve_path(project_root, cfg.get("offline_qwen_path"))
+                if offline_qwen and (
+                    (not offline_qwen.startswith("/"))
+                    or _looks_like_hf_model_dir(offline_qwen)
+                ):
+                    # offline_qwen 可能是 HF repo id（不以 / 开头）或本地模型目录（含 config.json）
+                    known_args.sglang_model = offline_qwen
+                    print(
+                        f"ℹ️ 从 config.yaml 读取 offline_qwen_path 作为模型: {known_args.sglang_model}"
+                    )
+                else:
+                    # 3) 次选：用 model_mappings + models_path 拼接（默认别名 qwen3-4b）
+                    models_path = _resolve_path(project_root, cfg.get("models_path"))
+                    mappings = cfg.get("model_mappings") or {}
+                    default_alias = "qwen3-4b"
+                    mapped = mappings.get(default_alias)
+
+                    if models_path and mapped:
+                        mapped = str(mapped).strip()
+                        # mapped 若是绝对/相对路径，直接 resolve；否则视为相对 models_path 的子目录或 HF id
+                        if mapped.startswith("/") or mapped.startswith("."):
+                            candidate = _resolve_path(project_root, mapped)
+                        else:
+                            # "Qwen/Qwen3-4B" 更可能是相对 models_path 的子目录（离线）
+                            if str(models_path).startswith("/"):
+                                candidate = str((Path(models_path) / mapped).resolve())
+                            else:
+                                candidate = mapped  # 非预期情况，保守返回原字符串
+
+                        if candidate and (
+                            (not candidate.startswith("/"))
+                            or _looks_like_hf_model_dir(candidate)
+                        ):
+                            known_args.sglang_model = candidate
+                            print(
+                                f"ℹ️ 从 config.yaml 的 model_mappings['{default_alias}'] 推导模型: {known_args.sglang_model}"
+                            )
+
+            if not known_args.sglang_model:
+                print(
+                    "⚠️ 未从 CLI/env/config.yaml 获取到可用模型。请显式传入 `--sglang-model /path/to/model_dir`（需包含 config.json），或传 HuggingFace repo id。"
+                )
 
     try:
         run_workflow = create_sglang_analysis_workflow()

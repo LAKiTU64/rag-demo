@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional, List, Dict
 import re
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, TextGenerationPipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 _PROMPT_TEMPLATE = (
     "你是GPU性能分析专家。阅读以下性能报告，为其中列出的每个 kernel 生成 Markdown 表格，"
@@ -116,22 +116,28 @@ class OfflineQwenClient:
             dtype=torch.float16 if torch.cuda.is_available() else None,
             trust_remote_code=True,
         )
-        self.pipeline = TextGenerationPipeline(
-            model=self.model,
-            tokenizer=self.tokenizer,
-        )
+        # 不再使用 TextGenerationPipeline（它不支持 chat template）
+        # 改为直接调用 model.generate()
 
     def report_to_table(self, report_text: str) -> str:
         prompt = _PROMPT_TEMPLATE.format(report=report_text)
-        outputs = self.pipeline(
-            prompt,
+        # 构造聊天消息
+        messages = [{"role": "user", "content": prompt}]
+        input_ids = self.tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
+        ).to(self.model.device)
+
+        outputs = self.model.generate(
+            input_ids,
             max_new_tokens=10000,
-            temperature=0.2,
+            temperature=0.0,
             do_sample=False,
+            pad_token_id=self.tokenizer.eos_token_id,
         )
-        generated = outputs[0]["generated_text"]
-        if generated.startswith(prompt):
-            generated = generated[len(prompt) :]
+
+        generated_ids = outputs[0][input_ids.shape[1] :]
+        generated = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+
         cleaned = _extract_table_only(generated.strip())
         if not cleaned or cleaned.count("|") < 6:
             parsed_entries = _parse_kernel_entries(report_text)
@@ -140,23 +146,65 @@ class OfflineQwenClient:
             cleaned = generated.strip()
         return _truncate_kernel_column(cleaned)
 
-    # ✅ 新增方法：用于 Agentic-RAG 的决策推理
-    def generate(self, prompt: str, max_tokens: int = 2048) -> str:
+    # ✅ 修复后的 generate 方法：支持 chat template + 确定性输出
+    def generate(
+        self,
+        prompt: str,
+        max_tokens: int = 1024,
+        mode: str = "conversation",  # 新增参数，默认为对话模式
+    ) -> str:
         """
-        使用本地 Qwen 模型生成文本（用于 RAG 决策）
+        使用本地 Qwen 模型生成文本。
+
+        Args:
+            prompt: 用户输入
+            max_tokens: 最大生成长度
+            mode:
+                - "structured": 用于工具调用、意图解析等，强制纯 JSON，禁用 <think>
+                - "conversation": 用于回答用户问题，允许自然语言、推理、<think>
         """
-        outputs = self.pipeline(
-            prompt,
-            max_new_tokens=max_tokens,
-            temperature=0.1,  # 降低随机性，提高稳定性
-            do_sample=False,
-            pad_token_id=self.tokenizer.eos_token_id,
-        )
-        generated = outputs[0]["generated_text"]
-        # 去掉输入 prompt（如果模型返回了完整上下文）
-        if generated.startswith(prompt):
-            generated = generated[len(prompt) :].lstrip()
-        return generated.strip()
+        if mode == "structured":
+            messages = [
+                {
+                    "role": "system",
+                    "content": "你是一个高性能计算专家。请直接输出结果，不要任何思考过程，不要使用 <think> 标签，不要解释，不要 Markdown，只输出纯 JSON。",
+                },
+                {"role": "user", "content": prompt},
+            ]
+            temperature = 0.0
+            do_sample = False
+            top_p = None
+        elif mode == "conversation":
+            messages = [{"role": "user", "content": prompt}]
+            temperature = 0.3
+            do_sample = True
+            top_p = 0.9
+        else:
+            raise ValueError("mode 必须是 'structured' 或 'conversation'")
+
+        input_ids = self.tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
+        ).to(self.model.device)
+
+        gen_kwargs = {
+            "max_new_tokens": max_tokens,
+            "temperature": temperature,
+            "do_sample": do_sample,
+            "pad_token_id": self.tokenizer.eos_token_id,
+        }
+        if top_p is not None:
+            gen_kwargs["top_p"] = top_p
+
+        outputs = self.model.generate(input_ids, **gen_kwargs)
+        generated_ids = outputs[0][input_ids.shape[1] :]
+        generated = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+        # 仅在 structured 模式下清理 <think>（保险）
+        if mode == "structured":
+            generated = re.sub(r"<think>.*?</think>", "", generated, flags=re.DOTALL)
+            generated = generated.strip()
+
+        return generated
 
 
 _client_lock = threading.Lock()
