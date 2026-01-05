@@ -76,23 +76,25 @@ class AIAgent:
             rag_context = "\n".join(rag_snippets)
 
         # Step 2: 构造决策 Prompt
-        rag_prompt = f"""你是一个高性能计算（HPC）与大模型性能分析专家。
-请根据以下信息判断用户意图，并决定是否需要启动 NSys/NCU 性能分析流程。
+        rag_prompt = f"""
+            你是一个高性能计算（HPC）与大模型性能分析专家。
+            请根据以下信息判断用户意图，并决定是否需要启动 NSys/NCU 性能分析流程。
 
-### 用户原始请求
-{message}
+            ### 用户原始请求
+            {message}
 
-### 相关知识库片段（如有）
-{rag_context if rag_context else "无相关历史文档"}
+            ### 相关知识库片段（如有）
+            {rag_context if rag_context else "无相关历史文档"}
 
-### 你的任务
-1. 如果知识库已包含足够答案（例如常见问题、已知瓶颈、优化建议），请直接回答。
-2. 如果请求涉及对具体模型的性能分析（如“分析 qwen-7b”、“测试 batch_size=4”），则必须返回严格 JSON 格式：
-   {{"action": "run_analysis", "model": "模型名", "analysis_type": "类型", "params": {{"batch_size": [...], "input_len": [...], "output_len": [...]}}}}
-3. 如果信息不足或模型未知，请返回：
-   {{"action": "clarify", "message": "请说明..."}}
+            ### 你的任务
+            1. 如果知识库已包含足够答案（例如常见问题、已知瓶颈、优化建议），请直接回答。
+            2. 如果请求涉及对具体模型的性能分析（如“分析 qwen-7b”、“测试 batch_size=4”），则必须返回严格 JSON 格式：
+            {{"action": "run_analysis", "model": "模型名", "analysis_type": "类型", "params": {{"batch_size": [...], "input_len": [...], "output_len": [...]}}}}
+            3. 如果信息不足或模型未知，请返回：
+            {{"action": "clarify", "message": "请说明..."}}
 
-只输出 JSON 或直接回答，不要解释。"""
+            只输出 JSON 或直接回答，不要解释。
+        """
 
         # Step 3: 调用 LLM 决策
         try:
