@@ -12,6 +12,8 @@ from pathlib import Path
 import sys
 from typing import Dict, List, Optional, Tuple
 
+import yaml
+
 
 # 导入分析工具
 sys.path.insert(0, str(Path(__file__).parent))
@@ -562,53 +564,27 @@ class AIAgent:
 
 # ==================== 简单测试用例 ====================
 if __name__ == "__main__":
-    from pathlib import Path
+    # 导入config
+    with open("config.yaml", "r", encoding="utf-8") as f:
+        config_yaml = yaml.safe_load(f)
 
-    # 创建测试文档目录
-    test_doc_dir = Path("./documents")
-    test_doc_dir.mkdir(exist_ok=True)
-    test_file = test_doc_dir / "optim_tips.md"
-    if not test_file.exists():
-        test_file.write_text(
-            "# Qwen 优化建议\n"
-            "当 batch_size > 8 时，L2 缓存命中率显著下降。\n"
-            "建议 input_len 控制在 512 以内以避免显存溢出。\n"
-            "热点 kernel: flash_attn_fwd, rms_norm_kernel\n"
-            "对于 qwen-1.8b，推荐 batch_size=1~4。"
-        )
+    # agent初始化
+    agent = AIAgent(config_yaml)
 
-    # 初始化 KB 并加载
-    kb = VectorKBManager()
-    kb.add_document(str(test_file))
+    # 构建知识库
+    document_dir = Path("documents")
+    if document_dir.exists():
+        for file_path in document_dir.iterdir():
+            if file_path.is_file():
+                agent.kb.add_document(str(file_path))
+                print(f"已添加文档: {file_path}")
+    else:
+        print(f"文档目录不存在: {document_dir}")
 
-    # 模拟配置
-    mock_config = {
-        "sglang_path": "./SGlang",
-        "models_path": "./models",
-        "model_mappings": {
-            "qwen-1.8b": "Qwen1.5-1.8B",
-            "llama-3-8b": "Meta-Llama-3-8B",
-        },
-        "output": {"results_dir": "./test_results"},
-        "analysis_defaults": {
-            "batch_size": [1],
-            "input_len": [128],
-            "output_len": [32],
-        },
-    }
+    # 测试问答
+    async def run_test():
+        print("🔍 测试问答功能")
+        response = await agent.process_message("请分析qwen-1.8b模型的性能")
+        print(f"响应: {response}")
 
-    agent = AIAgent(mock_config)
-
-    async def run_tests():
-        print("🔍 测试 1: 知识库问答（应直接回答）")
-        resp1 = await agent.process_message("Qwen 大 batch 有什么问题？")
-        print(resp1)
-        print("\n" + "=" * 60 + "\n")
-
-        print("🚀 测试 2: 启动性能分析（应触发分析流程）")
-        resp2 = await agent.process_message(
-            "分析 qwen-1.8b，batch_size=4, input_len=256"
-        )
-        print(resp2)
-
-    asyncio.run(run_tests())
+    asyncio.run(run_test())
