@@ -141,7 +141,7 @@ class OfflineQwenClient:
         return _truncate_kernel_column(cleaned)
 
     # ✅ 新增方法：用于 Agentic-RAG 的决策推理
-    def generate(self, prompt: str, max_tokens: int = 512) -> str:
+    def generate(self, prompt: str, max_tokens: int = 2048) -> str:
         """
         使用本地 Qwen 模型生成文本（用于 RAG 决策）
         """
