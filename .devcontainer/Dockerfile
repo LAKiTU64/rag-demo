@@ -1,4 +1,7 @@
-# 使用你指定的华为云镜像作为基础
+# 使用外部镜像源
+# FROM docker.io/lmsysorg/sglang:v0.4.7-cu124
+
+# 使用指定的华为云镜像作为基础（内网可用）
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/lmsysorg/sglang:v0.4.7-cu124
 
 # 切换到 root 用户进行软件包安装
