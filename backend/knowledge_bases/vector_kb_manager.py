@@ -15,15 +15,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 # --- Config ---
-EMBEDDING_MODEL = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "..",
-    "..",
-    ".models",
-    "BAAI",
-    "bge-small-zh-v1.5",
-)
-CHROMA_PATH = "/.chroma_db"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))  # 回到 /workspaces/rag-demo
+
+EMBEDDING_MODEL = os.path.join(PROJECT_ROOT, ".models", "BAAI", "bge-small-zh-v1.5")
+CHROMA_PATH = os.path.join(PROJECT_ROOT, ".chroma_db")
+DOCS_DIR = os.path.join(PROJECT_ROOT, "documents")
+
+
 CHUNK_SIZE = 300
 CHUNK_OVERLAP = 100
 DEFAULT_SEARCH_K = 3
@@ -248,8 +247,7 @@ if __name__ == "__main__":
         print(f"❌ 启动失败: {e}")
         exit(1)
 
-    # 2. 指定测试目录
-    DOCS_DIR = "./documents"
+    # 2. 添加文档
     if not os.path.exists(DOCS_DIR):
         os.makedirs(DOCS_DIR)
         with open(os.path.join(DOCS_DIR, "sample.txt"), "w", encoding="utf-8") as f:
