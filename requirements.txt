@@ -1,8 +1,5 @@
-# 核心大模型推理与加速
-torch==2.7.1+cu118
-transformers==4.57.3
-accelerate==1.12.0
-bitsandbytes==0.49.0
+# 使用阿里云或清华源加速安装
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
 # LangChain 核心框架与工作流
 langchain==1.2.0

@@ -1,13 +1,29 @@
 {
   "name": "RAG-Demo-Env",
   "build": {
-    "dockerfile": "Dockerfile"
+    "dockerfile": "Dockerfile",
+    "context": ".."
   },
   "runArgs": [
-    "--gpus=all",
-    "--cap-add=SYS_ADMIN",
-    "--security-opt","apparmor:unconfined"
+    "--gpus", "all",
+    "--shm-size=32g",
+    "--network=host",
+    "--ipc=host"
   ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter",
+        "ms-vscode.cpptools"
+      ]
+    }
+  },
+  "remoteEnv": {
+    "NVIDIA_VISIBLE_DEVICES": "all",
+    "NVIDIA_DRIVER_CAPABILITIES": "compute,utility"
+  },
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "mounts": [
     // 将插件目录映射到 Docker 命名卷，重构也不会丢失已下载的插件文件
     "source=vscode-extensions,target=/root/.vscode-server/extensions,type=volume"

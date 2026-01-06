@@ -1,24 +1,15 @@
-# # 推荐使用 NVIDIA 官方提供的 Python 环境，省去配置 CUDA 的烦恼
-# FROM nvidia/cuda:12.1.0-base-ubuntu22.04
+# 使用你指定的华为云镜像作为基础
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/lmsysorg/sglang:v0.4.7-cu124
 
-# # 安装 Python 和基础工具
-# RUN apt-get update && apt-get install -y \
-#     python3.11 \
-#     python3-pip \
-#     git \
-#     && rm -rf /var/lib/apt/lists/*
+# 切换到 root 用户进行软件包安装
+USER root
 
-# WORKDIR /workspaces/${localWorkspaceFolderBasename}
+# 替换 Debian 的默认 APT 源为阿里云镜像
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
+    && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04
-
-
-# 配置阿里云镜像源并安装系统依赖
-RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
+# 更新软件包列表并安装必要的工具
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     git \
     build-essential \
@@ -27,4 +18,12 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /workspaces/${localWorkspaceFolderBasename}
+# 设置 pip 使用清华源
+RUN pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 安装 Python 依赖
+COPY requirements.txt /tmp/
+RUN pip3 install --break-system-packages -r /tmp/requirements.txt
+
+# 清理缓存
+RUN pip cache purge
