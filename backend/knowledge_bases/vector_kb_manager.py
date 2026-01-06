@@ -65,6 +65,9 @@ class VectorKBManager:
         if is_reset and os.path.exists(self.persist_directory):
             shutil.rmtree(self.persist_directory)
 
+        # 确保目录存在且有正确权限
+        os.makedirs(self.persist_directory, exist_ok=True)
+
         self.vectorstore = Chroma(
             persist_directory=self.persist_directory,
             embedding_function=self.embeddings,
@@ -103,9 +106,17 @@ class VectorKBManager:
         file_name = os.path.basename(file_path)
         add_time = datetime.now(BEIJING_TZ)
 
-        self.vectorstore.delete(where={"doc_id": file_name})
-
         try:
+            # 先删除同名文档（如果存在）
+            # 在容器环境中，如果删除失败，我们跳过它
+            try:
+                self.vectorstore.delete(where={"doc_id": file_name})
+            except Exception as delete_error:
+                # 忽略删除错误，继续添加新文档
+                print(
+                    f"⚠️ 删除旧文档失败 (可能不存在): {file_name}, 错误: {delete_error}"
+                )
+
             loader = self._get_loader(file_path)
             docs = loader.load()
 
@@ -201,7 +212,12 @@ class VectorKBManager:
         return {"total_chunks": len(metadatas)}
 
     def reset_index(self) -> None:
-        self._load_or_create(is_reset=True)
+        """重置向量库"""
+        if os.path.exists(self.persist_directory):
+            shutil.rmtree(self.persist_directory)
+
+        # 重建向量库实例 - 这会创建新的连接
+        self._load_or_create(is_reset=False)
         print("✨ 向量库已完成一键重置。")
 
     def as_retriever(self, **kwargs):
@@ -246,6 +262,8 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ 启动失败: {e}")
         exit(1)
+
+    # kb.reset_index()
 
     # 2. 添加文档
     if not os.path.exists(DOCS_DIR):
