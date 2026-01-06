@@ -90,7 +90,7 @@ class VectorKBManager:
         if ext == "txt":
             return TextLoader(file_path, encoding="utf-8")
         elif ext == "md":
-            return UnstructuredMarkdownLoader(file_path)
+            return TextLoader(file_path, encoding="utf-8")
         elif ext == "docx":
             return Docx2txtLoader(file_path)
         elif ext == "pdf":
@@ -291,7 +291,7 @@ if __name__ == "__main__":
 
     for res in results:
         print(
-            f"📄 来源: {res['doc_id']} | 评分: {res['score']} | 内容: {res['content'][:50]}..."
+            f"📄 来源: {res['doc_id']} | 评分: {res['score']} | 内容: {res['content']}..."
         )
 
     print("\n✅ 批量测试流程结束。")

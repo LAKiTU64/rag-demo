@@ -17,7 +17,6 @@ chromadb==1.4.0
 langchain-text-splitters==1.1.0
 pypdf==6.5.0
 docx2txt==0.8
-unstructured==0.18.21
 
 # 环境配置与实用工具
 python-dotenv==1.2.1
@@ -35,6 +34,17 @@ requests>=2.31.0
 
 # 日期时间处理
 python-dateutil>=2.8.0
+
+# 模型加速和分布式推理
+accelerate>=0.20.0
+
+# 数据处理
+pandas>=1.5.0
+numpy>=1.21.0
+
+# 可视化
+matplotlib>=3.5.0
+seaborn>=0.11.0
 
 # 其他工具
 python-multipart>=0.0.6

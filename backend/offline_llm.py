@@ -113,7 +113,7 @@ class OfflineQwenClient:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_dir,
             device_map="auto",
-            dtype=torch.float16 if torch.cuda.is_available() else None,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else None,
             trust_remote_code=True,
         )
         # 不再使用 TextGenerationPipeline（它不支持 chat template）
